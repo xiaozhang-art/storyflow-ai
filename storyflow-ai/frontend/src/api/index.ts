@@ -1,4 +1,12 @@
 import axios from 'axios';
+import type {
+  StoryCreateRequest,
+  StoryResponse,
+  GenerateResponse,
+  TaskStatusResponse,
+  TaskProgressEvent,
+  StoryResultResponse,
+} from '../types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -8,120 +16,59 @@ const api = axios.create({
   },
 });
 
-export interface Story {
-  id: string;
-  title: string;
-  prompt: string;
-  genre: string;
-  status: string;
-  task_id: string | null;
-  video_url: string | null;
-  script: string | null;
-  scenes: Scene[] | null;
-  characters: Character[] | null;
-  created_at: string;
-  updated_at: string;
-}
+// ==================== Story API ====================
 
-export interface Scene {
-  id: string;
-  story_id: string;
-  scene_number: number;
-  description: string;
-  dialogue: string;
-  image_url: string | null;
-  audio_url: string | null;
-}
-
-export interface Character {
-  id: string;
-  story_id: string;
-  name: string;
-  description: string;
-  reference_image_url: string | null;
-}
-
-export interface TaskStatus {
-  task_id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  current_step: number;
-  total_steps: number;
-  progress: number;
-  message: string;
-  result: Record<string, unknown> | null;
-  error: string | null;
-}
-
-export interface CreateStoryRequest {
-  title: string;
-  prompt: string;
-  genre: string;
-}
-
-export async function createStory(data: CreateStoryRequest): Promise<Story> {
-  const response = await api.post<Story>('/stories', data);
+export async function createStory(data: StoryCreateRequest): Promise<StoryResponse> {
+  const response = await api.post<StoryResponse>('/story', data);
   return response.data;
 }
 
-export async function getStory(id: string): Promise<Story> {
-  const response = await api.get<Story>(`/stories/${id}`);
+export async function getStory(id: string): Promise<StoryResponse> {
+  const response = await api.get<StoryResponse>(`/story/${id}`);
   return response.data;
 }
 
-export async function listStories(): Promise<Story[]> {
-  const response = await api.get<Story[]>('/stories');
+export async function listStories(skip = 0, limit = 20): Promise<StoryResponse[]> {
+  const response = await api.get<StoryResponse[]>('/story', {
+    params: { skip, limit },
+  });
   return response.data;
 }
 
-export async function startGeneration(storyId: string): Promise<{ task_id: string }> {
-  const response = await api.post<{ task_id: string }>(`/stories/${storyId}/generate`);
+export async function startGeneration(storyId: string): Promise<GenerateResponse> {
+  const response = await api.post<GenerateResponse>(`/story/${storyId}/generate`);
   return response.data;
 }
 
-export async function getTaskStatus(taskId: string): Promise<TaskStatus> {
-  const response = await api.get<TaskStatus>(`/tasks/${taskId}/status`);
+export async function getStoryResult(storyId: string): Promise<StoryResultResponse> {
+  const response = await api.get<StoryResultResponse>(`/story/${storyId}/result`);
   return response.data;
 }
 
-export interface WebSocketMessage {
-  type: 'progress' | 'complete' | 'error';
-  task_id: string;
-  status?: string;
-  current_step?: number;
-  total_steps?: number;
-  progress?: number;
-  message?: string;
-  result?: Record<string, unknown>;
-  error?: string;
+// ==================== Task API ====================
+
+export async function getTaskStatus(taskId: string): Promise<TaskStatusResponse> {
+  const response = await api.get<TaskStatusResponse>(`/task/${taskId}`);
+  return response.data;
 }
+
+// ==================== WebSocket ====================
 
 export function connectWebSocket(
   taskId: string,
-  onMessage: (msg: WebSocketMessage) => void,
+  onMessage: (msg: TaskProgressEvent) => void,
 ): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws/tasks/${taskId}`;
+  const wsUrl = `${protocol}//${window.location.host}/api/task/${taskId}/ws`;
   const ws = new WebSocket(wsUrl);
-
-  ws.onopen = () => {
-    console.log(`WebSocket connected for task ${taskId}`);
-  };
 
   ws.onmessage = (event) => {
     try {
-      const data: WebSocketMessage = JSON.parse(event.data);
+      const data: TaskProgressEvent = JSON.parse(event.data);
       onMessage(data);
     } catch {
       console.error('Failed to parse WebSocket message', event.data);
     }
-  };
-
-  ws.onerror = (error) => {
-    console.error('WebSocket error', error);
-  };
-
-  ws.onclose = () => {
-    console.log(`WebSocket disconnected for task ${taskId}`);
   };
 
   return ws;

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import random
 from pathlib import Path
 
 import httpx
@@ -19,16 +20,19 @@ NEGATIVE_PROMPT = (
 
 COMFYUI_POLL_INTERVAL = 2.0  # seconds between status checks
 COMFYUI_POLL_TIMEOUT = 300.0  # max seconds to wait for a single image
+COMFYUI_MAX_RETRIES = 2  # retries per image on failure
 
 
-def _build_comfyui_payload(prompt_text: str) -> dict:
+def _build_comfyui_payload(prompt_text: str, seed: int | None = None) -> dict:
     """Build the ComfyUI API request payload."""
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
     return {
         "prompt": {
             "3": {
                 "class_type": "KSampler",
                 "inputs": {
-                    "seed": 42,
+                    "seed": seed,
                     "steps": 30,
                     "cfg": 7,
                     "sampler_name": "DPM++ 2M Karras",
@@ -130,53 +134,62 @@ async def _generate_single_image(
     prompt_text: str,
     story_id: str,
 ) -> dict:
-    """Submit a single image generation job to ComfyUI and wait for it."""
-    payload = _build_comfyui_payload(prompt_text)
+    """Submit a single image generation job to ComfyUI and wait for it.
 
-    # Submit the job
-    resp = await client.post(f"{settings.COMFYUI_URL}/prompt", json=payload)
-    resp.raise_for_status()
-    result = resp.json()
-    prompt_id = result.get("prompt_id")
-    if not prompt_id:
-        raise RuntimeError(f"ComfyUI did not return a prompt_id: {result}")
+    Retries up to COMFYUI_MAX_RETRIES times on failure.
+    """
+    last_error = None
+    for attempt in range(1, COMFYUI_MAX_RETRIES + 2):  # 1 initial + N retries
+        try:
+            payload = _build_comfyui_payload(prompt_text)
 
-    logger.debug("ComfyUI job submitted: prompt_id=%s scene_no=%d", prompt_id, scene_no)
+            resp = await client.post(f"{settings.COMFYUI_URL}/prompt", json=payload)
+            resp.raise_for_status()
+            result = resp.json()
+            prompt_id = result.get("prompt_id")
+            if not prompt_id:
+                raise RuntimeError(f"ComfyUI did not return a prompt_id: {result}")
 
-    # Poll until complete
-    history_entry = await _poll_until_complete(client, prompt_id)
-    outputs = history_entry.get("outputs", {})
+            logger.debug("ComfyUI job submitted: prompt_id=%s scene_no=%d attempt=%d", prompt_id, scene_no, attempt)
 
-    # Extract the saved image info
-    image_info = None
-    for node_id, node_output in outputs.items():
-        if "images" in node_output:
-            images = node_output["images"]
-            if images:
-                image_info = images[0]
-                break
+            history_entry = await _poll_until_complete(client, prompt_id)
+            outputs = history_entry.get("outputs", {})
 
-    if not image_info:
-        raise RuntimeError(f"No image returned for prompt_id={prompt_id}")
+            image_info = None
+            for node_id, node_output in outputs.items():
+                if "images" in node_output:
+                    images = node_output["images"]
+                    if images:
+                        image_info = images[0]
+                        break
 
-    filename = image_info["filename"]
-    subfolder = image_info.get("subfolder", "")
+            if not image_info:
+                raise RuntimeError(f"No image returned for prompt_id={prompt_id}")
 
-    # Build save path
-    save_dir = Path(settings.STORAGE_PATH) / "stories" / story_id / "images"
-    save_path = save_dir / f"scene_{scene_no}.png"
+            filename = image_info["filename"]
+            subfolder = image_info.get("subfolder", "")
 
-    # Download and save
-    image_path = await _download_image(client, filename, subfolder, save_path)
+            save_dir = Path(settings.STORAGE_PATH) / "stories" / story_id / "images"
+            save_path = save_dir / f"scene_{scene_no}.png"
+            image_path = await _download_image(client, filename, subfolder, save_path)
+            image_url = f"/storage/stories/{story_id}/images/scene_{scene_no}.png"
 
-    # Build a URL-style path that the frontend can use
-    image_url = f"/storage/stories/{story_id}/images/scene_{scene_no}.png"
+            return {
+                "scene_no": scene_no,
+                "image_path": image_path,
+                "image_url": image_url,
+            }
 
-    return {
-        "scene_no": scene_no,
-        "image_path": image_path,
-        "image_url": image_url,
-    }
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "Image generation attempt %d/%d failed for scene %d: %s",
+                attempt, COMFYUI_MAX_RETRIES + 1, scene_no, e,
+            )
+            if attempt <= COMFYUI_MAX_RETRIES:
+                await asyncio.sleep(2 * attempt)  # backoff
+
+    raise last_error  # type: ignore
 
 
 async def image_agent(state: StoryState) -> dict:

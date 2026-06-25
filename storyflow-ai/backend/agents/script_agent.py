@@ -6,9 +6,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import PydanticOutputParser
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from configs.settings import settings
 from schemas.agent import ScriptOutput
 from workflows.state import StoryState
+from app.llm import get_creative_llm
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +61,7 @@ async def _call_llm_for_script(prompt: str, genre: str) -> ScriptOutput:
     """Call the LLM to generate a complete short drama script."""
     parser = PydanticOutputParser(pydantic_object=ScriptOutput)
 
-    llm = ChatOpenAI(
-        model=settings.LLM_MODEL,
-        base_url=settings.LLM_BASE_URL,
-        api_key=settings.LLM_API_KEY,
-        temperature=settings.LLM_TEMPERATURE,
-        max_tokens=settings.LLM_MAX_TOKENS,
-    )
+    llm = get_creative_llm()
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),

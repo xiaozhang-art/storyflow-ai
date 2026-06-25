@@ -20,7 +20,8 @@ import {
   HistoryOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons';
-import { createStory, listStories, startGeneration, Story } from '../api';
+import { createStory, listStories, startGeneration } from '../api';
+import type { StoryResponse, StoryStatus } from '../types';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -34,16 +35,26 @@ const GENRE_OPTIONS = [
   { label: '穿越', value: '穿越' },
 ];
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: 'default',
+const STATUS_COLORS: Record<StoryStatus, string> = {
+  created: 'default',
   generating: 'processing',
+  script_done: 'cyan',
+  character_done: 'cyan',
+  storyboard_done: 'cyan',
+  image_done: 'cyan',
+  voice_done: 'cyan',
   completed: 'success',
   failed: 'error',
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: '等待中',
+const STATUS_LABELS: Record<StoryStatus, string> = {
+  created: '已创建',
   generating: '生成中',
+  script_done: '剧本完成',
+  character_done: '角色完成',
+  storyboard_done: '分镜完成',
+  image_done: '图片完成',
+  voice_done: '配音完成',
   completed: '已完成',
   failed: '失败',
 };
@@ -63,7 +74,7 @@ const HomePage: React.FC = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [storiesLoading, setStoriesLoading] = useState(false);
-  const [stories, setStories] = useState<Story[]>([]);
+  const [stories, setStories] = useState<StoryResponse[]>([]);
 
   const loadStories = async () => {
     setStoriesLoading(true);
@@ -99,10 +110,10 @@ const HomePage: React.FC = () => {
     }
   };
 
-  const handleStoryClick = (story: Story) => {
-    if (story.status === 'completed' && story.video_url) {
+  const handleStoryClick = (story: StoryResponse) => {
+    if (story.status === 'completed') {
       navigate(`/story/${story.id}/result`);
-    } else if (story.task_id) {
+    } else if (story.status === 'generating' || story.status.includes('_done')) {
       navigate(`/story/${story.id}`);
     } else {
       message.info('该故事尚未开始生成');

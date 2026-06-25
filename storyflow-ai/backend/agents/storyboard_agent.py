@@ -1,11 +1,15 @@
+"""Storyboard Agent - converts script to scene-by-scene storyboard."""
+
 import json
 import logging
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-from configs.settings import settings
+from utils.json_helper import parse_json_response
 from workflows.state import StoryState
+from app.llm import get_precise_llm
 
 logger = logging.getLogger(__name__)
 
@@ -21,24 +25,15 @@ SYSTEM_PROMPT = """\
 5. **画面构图**：每个场景的prompt要包含画面构图、光影、色调等细节
 
 可用镜头类型：
-- 远景（establishing shot / wide shot）：展示环境和氛围
+- 远景（wide shot）：展示环境和氛围
 - 中景（medium shot）：展示人物上半身和互动
 - 近景（close-up）：展示人物面部表情
 - 特写（extreme close-up）：展示细节（眼睛、手、物品）
-- 俯拍（high angle shot）：从上往下看，表现人物渺小或场景全貌
-- 仰拍（low angle shot）：从下往上看，表现人物力量或威严
+- 俯拍（high angle shot）：从上往下看
+- 仰拍（low angle shot）：从下往上看
 
-输出必须是一个合法的JSON数组，每个元素是一个场景：
-[
-  {
-    "scene": 1,
-    "camera": "中景",
-    "duration": 5,
-    "prompt": "详细的英文图像生成prompt，包含角色外观、场景描述、镜头角度、动漫风格",
-    "characters": ["角色A", "角色B"],
-    "dialogue": "当前场景的台词（如有）"
-  }
-]
+输出必须是合法JSON数组，每个元素格式：
+{"scene": 1, "camera": "中景", "duration": 5, "prompt": "英文图像生成prompt", "characters": ["角色A"], "dialogue": "台词"}
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -84,12 +79,37 @@ def _build_character_descriptions(characters: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _validate_scenes(scenes: list[dict]) -> list[dict]:
+    """Validate and normalize scene data."""
+    valid = []
+    for i, scene in enumerate(scenes):
+        if not isinstance(scene, dict):
+            continue
+        valid.append({
+            "scene": scene.get("scene", i + 1),
+            "camera": scene.get("camera", "中景"),
+            "duration": max(3, min(15, int(scene.get("duration", 5)))),
+            "prompt": scene.get("prompt", ""),
+            "characters": scene.get("characters", []),
+            "dialogue": scene.get("dialogue", ""),
+        })
+    return valid
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    before_sleep=lambda retry_state: logger.warning(
+        "Storyboard generation retry %d/3 for episode",
+        retry_state.attempt_number,
+    ),
+)
 async def _generate_storyboard_for_episode(
     episode: dict,
     character_descriptions: str,
     llm: ChatOpenAI,
 ) -> list[dict]:
-    """Generate storyboard scenes for a single episode."""
+    """Generate storyboard scenes for a single episode with retry."""
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
         ("human", USER_PROMPT_TEMPLATE),
@@ -106,14 +126,16 @@ async def _generate_storyboard_for_episode(
     })
 
     raw_text = response.content.strip()
-    if raw_text.startswith("```"):
-        lines = raw_text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        raw_text = "\n".join(lines)
+    scenes = parse_json_response(raw_text)
 
-    scenes = json.loads(raw_text)
+    if not isinstance(scenes, list):
+        # Wrap single object in list
+        scenes = [scenes] if isinstance(scenes, dict) else []
 
-    # Tag each scene with its episode number for downstream tracking
+    # Validate
+    scenes = _validate_scenes(scenes)
+
+    # Tag each scene with its episode number
     for scene in scenes:
         scene["episode_no"] = episode.get("episode_no", 1)
 
@@ -144,13 +166,7 @@ async def storyboard_agent(state: StoryState) -> dict:
 
         character_descriptions = _build_character_descriptions(characters)
 
-        llm = ChatOpenAI(
-            model=settings.LLM_MODEL,
-            base_url=settings.LLM_BASE_URL,
-            api_key=settings.LLM_API_KEY,
-            temperature=0.5,
-            max_tokens=settings.LLM_MAX_TOKENS,
-        )
+        llm = get_precise_llm()
 
         all_scenes: list[dict] = []
         for episode in episodes:
@@ -164,7 +180,7 @@ async def storyboard_agent(state: StoryState) -> dict:
             )
             all_scenes.extend(scenes)
 
-        # Assign a global scene number for image/voice/video agents
+        # Assign global scene number
         for idx, scene in enumerate(all_scenes, 1):
             scene["scene_no"] = idx
 

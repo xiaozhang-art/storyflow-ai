@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 
 from configs.settings import settings
@@ -11,76 +10,12 @@ from workflows.state import StoryState
 logger = logging.getLogger(__name__)
 
 
-def _build_ass_subtitle(
-    scene_no: int,
-    dialogue: str,
-    duration_seconds: float,
-    scene_characters: list[str],
-) -> str:
-    """Build an ASS subtitle entry for a single scene."""
-    # Map scene characters to readable speaker labels
-    speaker = scene_characters[0] if scene_characters else "旁白"
-
-    # Escape ASS special characters
-    safe_dialogue = dialogue.replace("\\", "\\\\").replace("\n", "\\N")
-
-    start = "0:00:00.00"
-    end_h = int(duration_seconds // 3600)
-    end_m = int((duration_seconds % 3600) // 60)
-    end_s = int(duration_seconds % 60)
-    end_ms = int((duration_seconds % 1) * 100)
-    end = f"{end_h}:{end_m:02d}:{end_s:02d}.{end_ms:02d}"
-
-    # Style: centered, white text with black outline, at bottom
-    return (
-        f"Dialogue: 0,{start},{end},Default,,0,0,0,,"
-        f"{{\\b1}}{speaker}：{safe_dialogue}"
-    )
-
-
-def _write_ass_file(
-    scenes: list[dict],
-    audios_map: dict[int, dict],
-    save_path: Path,
-) -> None:
-    """Write a complete ASS subtitle file from all scenes."""
-    ass_header = """\
-[Script Info]
-Title: StoryFlow AI Subtitles
-ScriptType: v4.00+
-PlayResX: 1024
-PlayResY: 1024
-WrapStyle: 0
-
-[V4+ Styles]
-Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,10,10,30,1
-
-[Events]
-Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
-"""
-    events = []
-    for scene in scenes:
-        scene_no = scene.get("scene_no", 0)
-        dialogue = scene.get("dialogue", "")
-        if not dialogue.strip():
-            continue
-
-        # Determine duration from audio if available, otherwise from storyboard
-        duration = 5.0
-        if scene_no in audios_map:
-            audio_path = audios_map[scene_no].get("audio_path", "")
-            if audio_path and Path(audio_path).exists():
-                duration = _get_audio_duration(audio_path)
-        else:
-            duration = float(scene.get("duration", 5))
-
-        scene_characters = scene.get("characters", [])
-        line = _build_ass_subtitle(scene_no, dialogue, duration, scene_characters)
-        events.append(line)
-
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    save_path.write_text(ass_header + "\n".join(events), encoding="utf-8")
+def _fmt_ass_time(seconds: float) -> str:
+    """Format seconds to ASS time string H:MM:SS.cc."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h}:{m:02d}:{int(s):02d}.{int((s % 1) * 100):02d}"
 
 
 def _get_audio_duration(audio_path: str) -> float:
@@ -102,6 +37,66 @@ def _get_audio_duration(audio_path: str) -> float:
         return 5.0
 
 
+def _write_ass_file(
+    scenes: list[dict],
+    audios_map: dict[int, dict],
+    save_path: Path,
+) -> None:
+    """Write a complete ASS subtitle file with cumulative timing."""
+    ass_header = """\
+[Script Info]
+Title: StoryFlow AI Subtitles
+ScriptType: v4.00+
+PlayResX: 1024
+PlayResY: 1024
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
+Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,10,10,30,1
+
+[Events]
+Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+"""
+    events = []
+    cumulative_time = 0.0
+
+    for scene in scenes:
+        scene_no = scene.get("scene_no", 0)
+        dialogue = scene.get("dialogue", "")
+        if not dialogue.strip():
+            # Still advance time for scenes without dialogue
+            cumulative_time += float(scene.get("duration", 5))
+            continue
+
+        # Determine duration from audio if available, otherwise from storyboard
+        duration = float(scene.get("duration", 5))
+        if scene_no in audios_map:
+            audio_path = audios_map[scene_no].get("audio_path", "")
+            if audio_path and Path(audio_path).exists():
+                duration = _get_audio_duration(audio_path)
+
+        start = _fmt_ass_time(cumulative_time)
+        end = _fmt_ass_time(cumulative_time + duration)
+
+        speaker = "旁白"
+        scene_characters = scene.get("characters", [])
+        if scene_characters:
+            speaker = scene_characters[0]
+
+        safe_dialogue = dialogue.replace("\\", "\\\\").replace("\n", "\\N")
+        events.append(
+            f"Dialogue: 0,{start},{end},Default,,0,0,0,,"
+            f"{{\\b1}}{speaker}：{safe_dialogue}"
+        )
+
+        cumulative_time += duration
+
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_path.write_text(ass_header + "\n".join(events), encoding="utf-8")
+    logger.info("ASS subtitles written: %d dialogue lines, total %.1fs", len(events), cumulative_time)
+
+
 async def _create_scene_video(
     scene_no: int,
     image_path: str,
@@ -121,9 +116,8 @@ async def _create_scene_video(
     ]
 
     if audio_path and Path(audio_path).exists():
-        cmd.extend(["-i", audio_path, "-shortest"])
+        cmd.extend(["-i", audio_path, "-shortest", "-c:a", "aac", "-b:a", "128k"])
     else:
-        # If no audio, use a fixed duration from the storyboard (default 5s)
         cmd.extend(["-t", "5"])
 
     cmd.extend([
@@ -145,9 +139,7 @@ async def _create_scene_video(
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
 
         if proc.returncode != 0:
-            logger.error(
-                "ffmpeg failed for scene %d: %s", scene_no, stderr.decode()
-            )
+            logger.error("ffmpeg failed for scene %d: %s", scene_no, stderr.decode())
             return False
 
         return True
@@ -161,8 +153,8 @@ async def video_agent(state: StoryState) -> dict:
     """
     Video assembly agent.
     For each scene, creates a video clip from the generated image and audio
-    using ffmpeg.  Then generates ASS subtitles and finally concatenates all
-    scene clips into a single story video.
+    using ffmpeg. Then generates ASS subtitles with cumulative timing and
+    finally concatenates all scene clips into a single story video.
     """
     logger.info(
         "video_agent started | task_id=%s story_id=%s",
@@ -201,9 +193,7 @@ async def video_agent(state: StoryState) -> dict:
         scene_no = scene.get("scene_no", 0)
         img_info = image_map.get(scene_no)
         if not img_info:
-            logger.warning(
-                "No image for scene %d, skipping | task_id=%s", scene_no, task_id
-            )
+            logger.warning("No image for scene %d, skipping | task_id=%s", scene_no, task_id)
             continue
 
         image_path = img_info.get("image_path", "")
@@ -231,18 +221,47 @@ async def video_agent(state: StoryState) -> dict:
             "video_path": "",
         }
 
-    # --- Step 2: Generate ASS subtitle file ---
+    # --- Step 2: Generate ASS subtitle file (with cumulative timing) ---
     ass_path = video_dir / "subtitles.ass"
     _write_ass_file(storyboard, audio_map, ass_path)
     logger.info("Subtitles written to %s", ass_path)
 
-    # --- Step 3: Concatenate all scene videos ---
+    # --- Step 3: Burn subtitles into each scene video ---
+    subtitled_dir = story_dir / "subtitled"
+    subtitled_dir.mkdir(parents=True, exist_ok=True)
+    subtitled_videos: list[Path] = []
+
+    for sv in scene_videos:
+        out = subtitled_dir / sv.name
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(sv),
+            "-vf", f"ass={ass_path}",
+            "-c:a", "copy",
+            str(out),
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            if proc.returncode == 0 and out.exists():
+                subtitled_videos.append(out)
+            else:
+                # Fallback: use unsubtitled version
+                subtitled_videos.append(sv)
+                logger.warning("Subtitle burn failed for %s, using unsubtitled", sv.name)
+        except Exception:
+            subtitled_videos.append(sv)
+
+    # --- Step 4: Concatenate all scene videos ---
     final_path = video_dir / "story.mp4"
     filelist_path = scenes_dir / "filelist.txt"
 
-    # Write concat file list
     with open(filelist_path, "w", encoding="utf-8") as f:
-        for sv in scene_videos:
+        for sv in subtitled_videos:
             f.write(f"file '{sv}'\n")
 
     concat_cmd = [
@@ -254,8 +273,7 @@ async def video_agent(state: StoryState) -> dict:
         str(final_path),
     ]
 
-    logger.info("Concatenating %d scene videos into final video", len(scene_videos))
-    logger.debug("Concat command: %s", " ".join(concat_cmd))
+    logger.info("Concatenating %d scene videos into final video", len(subtitled_videos))
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -266,13 +284,8 @@ async def video_agent(state: StoryState) -> dict:
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
 
         if proc.returncode != 0:
-            logger.error(
-                "Concat ffmpeg failed: %s | task_id=%s",
-                stderr.decode(),
-                task_id,
-            )
-            # Return partial success – individual scene videos still exist
-            video_path = str(scene_videos[0]) if scene_videos else ""
+            logger.error("Concat ffmpeg failed: %s | task_id=%s", stderr.decode(), task_id)
+            video_path = str(subtitled_videos[0]) if subtitled_videos else ""
             return {
                 "video_path": video_path,
                 "current_step": "video",
@@ -282,7 +295,7 @@ async def video_agent(state: StoryState) -> dict:
 
     except asyncio.TimeoutError:
         logger.error("Concat ffmpeg timed out | task_id=%s", task_id)
-        video_path = str(scene_videos[0]) if scene_videos else ""
+        video_path = str(subtitled_videos[0]) if subtitled_videos else ""
         return {
             "video_path": video_path,
             "current_step": "video",
@@ -290,12 +303,14 @@ async def video_agent(state: StoryState) -> dict:
             "error": "Video concatenation timed out.",
         }
 
+    # Cleanup temp files
+    try:
+        filelist_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
     video_url = f"/storage/stories/{story_id}/video/story.mp4"
-    logger.info(
-        "video_agent completed | final video: %s | task_id=%s",
-        final_path,
-        task_id,
-    )
+    logger.info("video_agent completed | final video: %s | task_id=%s", final_path, task_id)
 
     return {
         "video_path": str(final_path),

@@ -1,11 +1,15 @@
+"""Character Agent - enriches character visual descriptions with Pydantic validation."""
+
 import json
 import logging
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import PydanticOutputParser
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-from configs.settings import settings
 from workflows.state import StoryState
+from app.llm import get_precise_llm
 
 logger = logging.getLogger(__name__)
 
@@ -15,25 +19,7 @@ SYSTEM_PROMPT = """\
 1. 外观描述足够详细，可以用于AI图像生成
 2. 每个角色的视觉特征具有高度辨识度
 3. 描述用词精确，避免模糊表达
-
-输出必须是一个合法的JSON对象，格式如下：
-{
-  "characters": [
-    {
-      "name": "角色名",
-      "gender": "男/女",
-      "age": 25,
-      "appearance": {
-        "hair": "黑色短发，微卷，刘海略微遮住右眼",
-        "body": "身高180cm，体型偏瘦，肩膀略窄",
-        "cloth": "白色衬衫，袖子挽到手肘，黑色修身西裤，棕色皮带",
-        "face": "剑眉星目，高鼻梁，薄唇，下颌线分明，左眼下方有一颗小痣"
-      },
-      "personality": "外冷内热，做事果断，不善言辞但行动力强",
-      "catchphrase": "……没什么，我只是在想该怎么做。"
-    }
-  ]
-}
+4. 所有描述最终会转为英文 prompt，所以细节要具体到可被 SD 理解
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -42,35 +28,52 @@ USER_PROMPT_TEMPLATE = """\
 {character_list}
 
 请确保每个角色的外观描述包含以下四个维度：
-- hair：发型、发色、长度、特殊造型
-- body：身高、体型、体态特征
-- cloth：服装风格、具体穿着、配饰
-- face：五官特征、肤色、特殊标记（痣、疤痕等）
+- hair：发型、发色、长度、特殊造型（英文描述）
+- body：身高、体型、体态特征（英文描述）
+- cloth：服装风格、具体穿着、配饰（英文描述）
+- face：五官特征、肤色、特殊标记（英文描述）
 
-同时为每个角色补充一句经典的口头禅（catchphrase），体现角色个性。
+同时为每个角色补充：
+- personality：性格特征的中文描述（字符串）
+- catchphrase：一句经典口头禅（中文）
 
-请直接输出JSON，不要包含其他文字。
+{format_instructions}
 """
 
 
+class EnrichedCharacterOutput(BaseModel):
+    """Pydantic model for LLM structured output of character enrichment."""
+    characters: list[dict]
+
+
+# Avoid circular import - define locally
+from pydantic import BaseModel as _BaseModel
+
+
+class EnrichedCharacterOutput(_BaseModel):
+    characters: list[dict]
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    before_sleep=lambda retry_state: logger.warning(
+        "Character agent retry %d/3", retry_state.attempt_number,
+    ),
+)
 async def _enrich_characters(characters: list[dict]) -> list[dict]:
     """Call the LLM to enrich character visual descriptions."""
-    llm = ChatOpenAI(
-        model=settings.LLM_MODEL,
-        base_url=settings.LLM_BASE_URL,
-        api_key=settings.LLM_API_KEY,
-        temperature=0.6,
-        max_tokens=settings.LLM_MAX_TOKENS,
-    )
+    llm = get_precise_llm()
+
+    parser = PydanticOutputParser(pydantic_object=EnrichedCharacterOutput)
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
         ("human", USER_PROMPT_TEMPLATE),
     ])
 
-    chain = chat_prompt | llm
+    chain = chat_prompt | llm | parser
 
-    # Build a readable character summary for the prompt
     character_summaries = []
     for i, char in enumerate(characters, 1):
         summary = (
@@ -84,18 +87,12 @@ async def _enrich_characters(characters: list[dict]) -> list[dict]:
 
     character_list_text = "\n".join(character_summaries)
 
-    response = await chain.ainvoke({"character_list": character_list_text})
+    result = await chain.ainvoke({
+        "character_list": character_list_text,
+        "format_instructions": parser.get_format_instructions(),
+    })
 
-    # Extract JSON from the response – LLMs sometimes wrap it in markdown fences
-    raw_text = response.content.strip()
-    if raw_text.startswith("```"):
-        # Remove leading ```json and trailing ```
-        lines = raw_text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        raw_text = "\n".join(lines)
-
-    parsed = json.loads(raw_text)
-    enriched_characters = parsed.get("characters", [])
+    enriched_characters = result.characters
 
     # Merge with original character data to preserve any fields not overwritten
     merged = []
@@ -148,6 +145,16 @@ async def character_agent(state: StoryState) -> dict:
 
     except Exception as exc:
         logger.exception("character_agent failed | task_id=%s", state.get("task_id"))
+        # Fallback: return original characters if enrichment fails
+        original = state.get("characters", [])
+        if original:
+            logger.warning("Falling back to original characters (%d) after failure", len(original))
+            return {
+                "characters": original,
+                "current_step": "character",
+                "status": "character_done",
+                "error": f"Character enrichment failed, using originals: {exc}",
+            }
         return {
             "current_step": "character",
             "status": "error",

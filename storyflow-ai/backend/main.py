@@ -1,4 +1,16 @@
-"""StoryFlow AI - AI漫剧自动生成平台."""
+"""StoryFlow AI - AI漫剧自动生成平台.
+
+Upgraded with Agent OS Runtime:
+- MCP Protocol (unified envelope)
+- Agent Runtime (stateless executor)
+- A2A Message Bus (agent communication)
+- Skill Engine (controlled generation)
+- Hook Framework (full observability)
+- Conversation Manager (multi-agent orchestration)
+- Session Manager (state management)
+- Unified Memory System (4-layer memory)
+- Execution Scheduler (DAG executor, worker pools)
+"""
 
 import os
 import logging
@@ -33,8 +45,10 @@ async def lifespan(app: FastAPI):
         logger.error(f"Database init failed: {e}")
 
     # Check Redis
+    redis = None
     try:
         await redis_client.ping()
+        redis = redis_client
         logger.info("Redis connected")
     except Exception as e:
         logger.warning(f"Redis not available: {e}")
@@ -42,12 +56,32 @@ async def lifespan(app: FastAPI):
     # Ensure storage directory exists
     os.makedirs(settings.STORAGE_PATH, exist_ok=True)
 
+    # Initialize Agent OS Runtime
+    try:
+        from runtime.app import init_runtime
+        runtime_app = init_runtime(settings=settings, redis_client=redis)
+        logger.info("Agent OS Runtime initialized")
+        app.state.runtime = runtime_app
+    except Exception as e:
+        logger.error(f"Runtime initialization failed: {e}")
+        logger.exception("Runtime init error details:")
+        app.state.runtime = None
+
     logger.info("StoryFlow AI started successfully")
 
     yield
 
     # Shutdown
     logger.info("Shutting down StoryFlow AI...")
+
+    # Log runtime stats before shutdown
+    try:
+        if hasattr(app.state, "runtime") and app.state.runtime:
+            stats = app.state.runtime.get_stats()
+            logger.info("Runtime shutdown stats: %s", stats)
+    except Exception:
+        pass
+
     try:
         await redis_client.close()
         logger.info("Redis disconnected")
@@ -62,8 +96,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="1.0.0",
-    description="基于 Multi-Agent Workflow 的 AI 漫剧自动生成平台",
+    version="2.0.0",
+    description="基于 Multi-Agent Runtime OS 的 AI 漫剧自动生成平台",
     lifespan=lifespan,
 )
 
@@ -97,4 +131,18 @@ if os.path.isdir(storage_path):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "app": settings.APP_NAME}
+    return {
+        "status": "ok",
+        "app": settings.APP_NAME,
+        "version": "2.0.0",
+        "runtime": bool(getattr(app.state, "runtime", None)),
+    }
+
+
+@app.get("/api/runtime/stats")
+async def runtime_stats():
+    """Get Agent OS Runtime statistics."""
+    runtime = getattr(app.state, "runtime", None)
+    if not runtime:
+        return {"error": "Runtime not initialized"}
+    return runtime.get_stats()

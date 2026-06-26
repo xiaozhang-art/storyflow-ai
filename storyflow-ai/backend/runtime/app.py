@@ -138,13 +138,29 @@ class RuntimeApp:
         self._log_init_stats()
 
     def _register_default_hooks(self, settings=None):
-        """Register default hook handlers."""
-        # Structured logger (always active)
+        """Register default hook handlers.
+
+        Hook chain (in order):
+        1. StructuredLogger - always-on JSON logging
+        2. QualityGate - validates output after each agent step
+        3. Langfuse - observability (if configured)
+        """
+        from runtime.hook import events as hook_events
+
+        # 1. Structured logger (always active)
         from runtime.handlers.logger_handler import create_logger_handler
         self.hook_dispatcher.register_global(create_logger_handler())
         logger.info("Hook registered: StructuredLogger")
 
-        # Langfuse (if configured)
+        # 2. Quality Gate (validates AFTER_AGENT events)
+        from runtime.handlers.quality_gate import create_quality_gate_handler
+        self.hook_dispatcher.register(
+            hook_events.AFTER_AGENT,
+            create_quality_gate_handler(),
+        )
+        logger.info("Hook registered: QualityGate (AFTER_AGENT)")
+
+        # 3. Langfuse (if configured)
         if settings:
             langfuse_pk = getattr(settings, "LANGFUSE_PUBLIC_KEY", "")
             langfuse_sk = getattr(settings, "LANGFUSE_SECRET_KEY", "")
@@ -161,32 +177,40 @@ class RuntimeApp:
                 logger.info("Hook registered: Langfuse")
 
     def _load_skills(self):
-        """Load skill definitions from the skills/ directory."""
-        # Try to load from the standard skills directory
+        """Load skill definitions from the skills/ directory.
+
+        Skills define each agent's capabilities, constraints, and I/O schemas.
+        They are used by the SkillExecutor for prompt rendering and validation.
+        """
+        import yaml
+
+        # Try to load from the standard skills directories
         skill_dirs = [
             os.path.join(os.path.dirname(__file__), "..", "skills"),
             "/app/skills",
         ]
 
         for skill_dir in skill_dirs:
+            skill_dir = os.path.abspath(skill_dir)
             if os.path.isdir(skill_dir):
                 try:
-                    import yaml
                     self.skill_registry.load_from_directory(skill_dir)
-                except ImportError:
-                    logger.warning("PyYAML not installed, skipping skill loading")
                 except Exception as e:
                     logger.warning("Failed to load skills from %s: %s", skill_dir, e)
                 break
+        else:
+            logger.warning("No skills directory found in %s", skill_dirs)
 
     def _log_init_stats(self):
         """Log initialization statistics."""
         stats = {
+            "version": "2.0",
             "skills": len(self.skill_registry.list_all()),
             "sessions": self.session_manager.get_stats(),
-            "hooks": "structured_logger",
+            "hooks": ["structured_logger", "quality_gate"],
+            "memory": self.memory_manager.get_stats() if self.memory_manager else {},
         }
-        logger.info("Runtime init stats: %s", stats)
+        logger.info("Runtime v2.0 init stats: %s", stats)
 
     def get_workflow_runner(self):
         """Get a RuntimeWorkflowRunner with all agents pre-registered."""

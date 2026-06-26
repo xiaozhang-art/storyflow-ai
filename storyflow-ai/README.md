@@ -67,26 +67,36 @@
 |--|--|--|
 | **触发方式** | 默认 | `USE_RUNTIME=true` |
 | **编排** | `StateGraph` + `StoryState` | `RuntimeWorkflowRunner` + `ConversationManager` |
-| **可观测性** | 日志 + DB 持久化 | Hook (BEFORE_AGENT / AFTER_AGENT / ON_ERROR) |
-| **记忆** | Qdrant 向量库 | 4 层 Memory (working / session / long-term / episodic) |
+| **可观测性** | 日志 + DB 持久化 | Hook 事件链 (Logger → QualityGate → Langfuse) |
+| **质量门禁** | 无 | QualityGate Hook (6 Agent 专用校验器，不合格自动重试) |
+| **人物一致性** | 无 | CharacterMemoryService (Memory 存储角色外观，分镜/出图时注入) |
+| **记忆** | 无 | 4 层 Memory (working / session / conversation / long-term) |
 | **通信** | 状态字典传递 | MCP Envelope + A2A Message Bus (memory / Redis Stream) |
-| **技能** | 硬编码 | Skill Engine (注册 / 选择 / 校验 / 执行) |
+| **技能** | 硬编码 | Skill Engine (6 个 YAML Skill 定义 + 约束校验) |
 | **会话** | 无 | Session Manager (状态管理 + 超时) |
 | **追踪** | 无 | Langfuse Handler (配置即启用) |
 | **调度** | LangGraph executor | Execution Scheduler (LLM / Tool / GPU 线程池) |
+| **增量持久化** | astream_events 逐步 | persist_callback 每步 DB 写入 |
 
-默认使用 LangGraph 管线，可通过环境变量 `USE_RUNTIME=true` 切换到 Agent OS Runtime。Runtime 会自动将现有 6 个 Agent 通过 `wrap_legacy_agent()` 适配器包装，无需重写 Agent 代码即可获得 Hook / Memory / Skill / A2A 能力。Runtime 初始化失败时自动 fallback 回 LangGraph。
+默认使用 LangGraph 管线，可通过环境变量 `USE_RUNTIME=true` 切换到 Agent OS Runtime。Runtime v2.0 通过适配器包装现有 Agent，无需重写代码即可获得三大增强能力：
+
+- **Hook 质量门禁** — 每个 Agent 完成后自动运行专用校验器（script 检查结构完整性、character 检查四维度外观、storyboard 检查场景数量和角色引用、image/voice/video 检查产出物），校验失败自动重试最多 2 次
+- **Memory 人物一致性** — character_agent 产出后自动将角色外观存入 Memory，storyboard_agent 生成分镜时自动注入一致性约束段落（"角色外观一致性约束（必须严格遵守）"），image_agent 可验证 prompt 是否包含完整角色特征
+- **Skill 驱动** — 6 个 Agent 各有 YAML Skill 定义（含 I/O Schema、约束规则、custom_rules），Runtime 启动时自动从 `skills/` 目录加载
+
+Runtime 初始化失败时自动 fallback 回 LangGraph。
 
 ### 核心设计
 
 - **实时进度推送** — Redis PubSub + WebSocket，前端 6 步进度条实时更新
-- **数据库持久化** — 每个 Agent 完成后立即写入 PostgreSQL（5 个 `_persist_*` 函数），中间结果不丢失
+- **数据库持久化** — 每个 Agent 完成后立即写入 PostgreSQL（5 个 `_persist_*` 函数），两个引擎均支持增量持久化
 - **崩溃恢复** — LangGraph `AsyncSqliteSaver` Checkpoint，进程重启后从断点续跑
 - **容错与降级** — 图片/配音/视频 Agent 按场景粒度 try/catch，部分失败不中断整体流程
-- **自动重试** — Script/Character/Storyboard Agent 使用 tenacity 3 次指数退避重试；Image Agent 每张图最多 2 次重试
+- **自动重试** — Script/Character/Storyboard Agent 使用 tenacity 3 次指数退避重试；Image Agent 每张图最多 2 次重试；Runtime 模式额外提供 Quality Gate 质量门禁重试（最多 2 次）
 - **LLM 工厂模式** — `get_creative_llm()` (temp=0.8) / `get_precise_llm()` (temp=0.4) 按场景选用，实例缓存复用
 - **结构化输出** — Script/Character Agent 用 `PydanticOutputParser`；Storyboard Agent 双策略（Pydantic 优先 + JSON fallback）
 - **Prompt 外部化** — 所有 Agent Prompt 集中在 `prompts/` 模块，与 Agent 逻辑解耦
+- **Runtime 三大能力** — Hook（质量门禁）、Memory（人物一致性）、Skill（约束驱动）三大系统已完整接通管线
 
 ## 技术栈
 
@@ -175,17 +185,25 @@ storyflow-ai/
 │   ├── utils/
 │   │   └── json_helper.py
 │   │
+│   ├── skills/                        # ⭐ Skill 定义 (YAML)
+│   │   ├── script_writer/skill.yaml   #   编剧 Skill (max 6 episodes)
+│   │   ├── character_designer/        #   角色设计 Skill (4维度必须)
+│   │   ├── storyboard_designer/       #   分镜 Skill (角色一致性约束)
+│   │   ├── image_generator/           #   出图 Skill (DPM++ 2M Karras)
+│   │   ├── voice_generator/           #   配音 Skill (性别→音色)
+│   │   └── video_composer/            #   合成 Skill (ASS字幕+拼接)
+│   │
 │   └── runtime/                       # ⭐ Agent OS Runtime (v2.0)
-│       ├── app.py                     # RuntimeApp 入口 (初始化 + 组装)
-│       ├── adapter.py                 # Legacy Agent → Runtime 适配器
+│       ├── app.py                     # RuntimeApp (Hook+Skill+Memory 组装)
+│       ├── adapter.py                 # 适配器 (Memory注入+质量重试+Skill约束)
 │       ├── agent_runtime/             # Agent 运行时上下文
 │       ├── execution/                 # 调度器 (LLM/Tool/GPU 线程池)
 │       ├── conversation/              # 对话管理 (线性管线编排)
 │       ├── skill_engine/              # 技能注册/选择/校验/执行
-│       ├── memory/                    # 4 层记忆管理
+│       ├── memory/                    # 4 层记忆 + CharacterMemoryService
 │       ├── session/                   # 会话管理 (超时/恢复)
-│       ├── hook/                      # 事件钩子 (BEFORE/AFTER/ON_ERROR)
-│       ├── handlers/                  # 日志 / Langfuse 追踪
+│       ├── hook/                      # 事件钩子 (14 种生命周期事件)
+│       ├── handlers/                  # Logger / QualityGate / Langfuse
 │       ├── mcp/                       # MCP 协议 (Envelope/Router/Validator)
 │       └── message_bus/               # A2A 通信 (InMemory/Redis Stream)
 │
@@ -363,13 +381,16 @@ task           ─── 任务 (status, progress, current_step, error_message)
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `LANGFUSE_PUBLIC_KEY` | — | Langfuse 公钥 |
+| `USE_RUNTIME` | `false` | 设为 `true` 启用 Agent OS Runtime v2.0 |
+| `LANGFUSE_PUBLIC_KEY` | — | Langfuse 公钥（启用可观测性） |
 | `LANGFUSE_SECRET_KEY` | — | Langfuse 密钥 |
 | `A2A_TRANSPORT` | `memory` | Agent 通信 (`memory` / `redis`) |
 | `LLM_WORKER_CONCURRENCY` | `10` | LLM 并发数 |
 | `GPU_WORKER_CONCURRENCY` | `2` | GPU 并发数 |
 | `SESSION_IDLE_TIMEOUT` | `86400` | 会话超时 (秒) |
 | `MEMORY_WORKING_TTL` | `300` | 工作记忆 TTL (秒) |
+| `MEMORY_SESSION_TTL` | `86400` | 会话记忆 TTL (秒) |
+| `MEMORY_CONFIDENCE_THRESHOLD` | `0.7` | 记忆存储最低置信度 |
 
 ## License
 

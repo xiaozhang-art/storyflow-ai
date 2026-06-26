@@ -32,8 +32,8 @@ async def _call_llm_for_script(prompt: str, genre: str) -> ScriptOutput:
     llm = get_creative_llm()
 
     chat_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", USER_PROMPT),
+        ("system", SCRIPT_SYSTEM_PROMPT),
+        ("human", SCRIPT_USER_PROMPT),
     ])
 
     chain = chat_prompt | llm | parser

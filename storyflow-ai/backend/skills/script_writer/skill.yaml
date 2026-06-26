@@ -1,17 +1,46 @@
 skill_id: script_writer
-name: Script Writer
+name: 短剧编剧
 version: "1.0"
-description: Generates structured drama scripts with episodes, scenes, and dialogue for AI comic drama production.
+description: 根据用户需求和题材生成结构化短剧剧本，包含大纲、角色设定和分集剧本。
 agent_id: script
-tools: []
-tags: [script, drama, writing, story]
+tags: [script, writing, creative, llm]
+
 constraints:
-  max_output_items: 10
+  max_output_items: 6       # max episodes
+  max_tokens: 4096
   allowed_formats: ["json"]
-  style: ""
   forbidden_content: []
+  style: creative
   custom_rules:
-    - "Output must be valid JSON"
-    - "Each episode must have at least 3 scenes"
-    - "Characters must be consistent across episodes"
-    - "Include emotional beats and dramatic tension"
+    - 每集开头3秒内必须抓住注意力
+    - 每集结尾必须有悬念钩子
+    - 角色数量控制在3-6个
+    - 每集对话200-500字
+
+input_schema:
+  type: object
+  required: [prompt, genre]
+  properties:
+    prompt:
+      type: string
+      description: 用户的故事需求描述
+    genre:
+      type: string
+      description: 题材类型
+    memory_context:
+      type: string
+      description: Memory系统注入的历史上下文
+
+output_schema:
+  type: object
+  required: [outline, characters, episodes]
+  properties:
+    outline:
+      type: string
+      description: 剧情大纲
+    characters:
+      type: array
+      description: 角色列表
+    episodes:
+      type: array
+      description: 分集剧本

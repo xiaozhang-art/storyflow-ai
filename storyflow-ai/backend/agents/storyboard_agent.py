@@ -160,6 +160,16 @@ async def storyboard_agent(state: StoryState) -> dict:
             raise ValueError("No characters found in state.")
 
         character_descriptions = _build_character_descriptions(characters)
+
+        # Inject Memory-based character consistency section if available
+        consistency_section = state.get("_character_consistency", "")
+        if consistency_section:
+            character_descriptions += consistency_section
+            logger.info(
+                "Injected character consistency section from Memory | task_id=%s",
+                state.get("task_id"),
+            )
+
         llm = get_precise_llm()
 
         all_scenes: list[dict] = []

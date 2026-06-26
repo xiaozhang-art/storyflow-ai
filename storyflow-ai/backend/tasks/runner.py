@@ -207,17 +207,50 @@ async def _runtime_progress_callback(agent_id: str, progress: dict):
     """Progress callback for Runtime-based execution."""
     task_id = progress.get("task_id", "")
     pct = progress.get("progress", 0)
+    msg = progress.get("message", f"{agent_id} 完成 (Runtime v2.0)")
     await set_task_status(task_id, {
         "task_id": task_id,
         "status": "running",
         "progress": pct,
         "current_step": agent_id,
-        "message": f"{agent_id} 完成 (Runtime)",
+        "message": msg,
     })
 
 
+async def _runtime_persist_callback(step: str, state: dict):
+    """Incremental persistence callback for Runtime-based execution.
+
+    Called after each agent step completes, same as LangGraph's per-step persistence.
+    This ensures the frontend can show partial results even during Runtime execution.
+    """
+    story_id = state.get("story_id", "")
+    if not story_id:
+        return
+
+    if step == "script":
+        episodes = state.get("episodes", [])
+        if episodes:
+            await _persist_episodes(story_id, episodes)
+    elif step == "character":
+        characters = state.get("characters", [])
+        if characters:
+            await _persist_characters(story_id, characters)
+    elif step == "storyboard":
+        scenes = state.get("storyboard", [])
+        if scenes:
+            await _persist_scenes(story_id, scenes)
+    elif step == "image":
+        images = state.get("images", [])
+        if images:
+            await _persist_image_urls(story_id, images)
+    elif step == "voice":
+        audios = state.get("audios", [])
+        if audios:
+            await _persist_audio_urls(story_id, audios)
+
+
 async def _persist_runtime_results(story_id: str, state: dict):
-    """Persist all intermediate results from a Runtime execution."""
+    """Persist all intermediate results from a Runtime execution (fallback)."""
     if state.get("episodes"):
         await _persist_episodes(story_id, state["episodes"])
     if state.get("characters"):
@@ -250,14 +283,20 @@ async def run_story_generation(
 
 
 async def _run_with_runtime_backend(task_id, story_id, prompt, genre):
-    """Execute via Agent OS Runtime."""
-    logger.info("Starting Runtime generation: task=%s, story=%s", task_id, story_id)
+    """Execute via Agent OS Runtime v2.0 (with Memory + Hook + Skill)."""
+    logger.info("Starting Runtime v2.0 generation: task=%s, story=%s", task_id, story_id)
 
     try:
         await _update_progress(task_id, "init")
         await _update_db_progress(task_id, story_id, "init")
 
         from workflows.runtime_workflow import run_with_runtime
+
+        # Build incremental persist callback that also updates DB progress
+        async def persist_and_db_progress(step: str, state: dict):
+            await _runtime_persist_callback(step, state)
+            await _update_progress(task_id, step)
+            await _update_db_progress(task_id, story_id, step)
 
         result = await run_with_runtime(
             task_id=task_id,
@@ -267,9 +306,10 @@ async def _run_with_runtime_backend(task_id, story_id, prompt, genre):
             progress_callback=lambda aid, prog: _runtime_progress_callback(task_id, {
                 **prog, "task_id": task_id,
             }),
+            persist_callback=persist_and_db_progress,
         )
 
-        # Persist all results
+        # Fallback: persist anything not yet saved
         await _persist_runtime_results(story_id, result)
 
         await _update_progress(task_id, "done")

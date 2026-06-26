@@ -16,6 +16,7 @@ from runtime.mcp.envelope import MCPEnvelope, MessageType
 from runtime.agent_runtime.context import RuntimeContext
 from runtime.hook.dispatcher import HookEvent, get_hook_dispatcher
 from runtime.hook import events as hook_events
+from runtime.conversation.models import ConversationStatus
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +583,7 @@ class RuntimeWorkflowRunner:
         # Update conversation final status
         self.conversation_manager.update_conversation_state(
             conversation_id,
-            status="completed" if state.get("status") != "failed" else "failed",
+            status=ConversationStatus.COMPLETED if state.get("status") != "failed" else ConversationStatus.FAILED,
         )
 
         # Clean up retry hints

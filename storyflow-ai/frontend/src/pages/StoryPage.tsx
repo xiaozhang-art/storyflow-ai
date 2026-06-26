@@ -102,11 +102,28 @@ const StoryPage: React.FC = () => {
       }
     };
 
+    const recoverTask = async () => {
+      // Story is already generating (e.g. page refresh) — recover task_id from API
+      try {
+        const response = await fetch(`/api/task/by-story/${id}`);
+        if (response.ok) {
+          const task = await response.json();
+          setTaskId(task.id);
+          // Restore progress state immediately
+          setProgress(task.progress);
+          setCurrentStep(task.current_step || '');
+          setMessage(task.current_step || '正在努力生成中...');
+          if (task.error_message) setErrorMsg(task.error_message);
+        }
+      } catch {
+        // If recovery fails, user can still see the page
+      }
+    };
+
     if (story?.status === 'created') {
       initGeneration();
     } else if (story?.status === 'generating' || String(story?.status).includes('_done')) {
-      // Need to get task_id - we'll poll the story status to find it
-      // For now, connect WS with a fallback approach
+      recoverTask();
     }
   }, [id, story?.status]);
 

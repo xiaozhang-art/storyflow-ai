@@ -1,4 +1,7 @@
-"""Qdrant vector store for story and character memory."""
+"""Qdrant vector store for story and character memory.
+
+Uses lazy initialization to avoid crashing on import when Qdrant is unavailable.
+"""
 
 import logging
 from qdrant_client import QdrantClient
@@ -9,12 +12,24 @@ logger = logging.getLogger(__name__)
 
 
 class VectorStore:
-    """Wrapper around Qdrant for story memory operations."""
+    """Wrapper around Qdrant for story memory operations.
+
+    Connection is established lazily on first use, so importing this module
+    does not require Qdrant to be running.
+    """
 
     def __init__(self, url: str | None = None, collection_name: str | None = None):
         self.url = url or settings.QDRANT_URL
         self.collection_name = collection_name or settings.QDRANT_COLLECTION
-        self.client = QdrantClient(url=self.url)
+        self._client: QdrantClient | None = None
+
+    @property
+    def client(self) -> QdrantClient:
+        """Lazy-connect to Qdrant on first access."""
+        if self._client is None:
+            self._client = QdrantClient(url=self.url)
+            logger.info("Connected to Qdrant at %s", self.url)
+        return self._client
 
     def init_collection(self, vector_size: int = 1024):
         """Create collection if it does not exist."""
@@ -28,7 +43,6 @@ class VectorStore:
 
     def store_memory(self, story_id: str, content: str, metadata: dict):
         """Store a story memory entry."""
-        # Use a simple hash-based ID (in production, use real embeddings)
         import hashlib
         point_id = int(hashlib.md5(content.encode()).hexdigest()[:16], 16) % (2**63)
         self.client.upsert(
@@ -91,5 +105,5 @@ class VectorStore:
         return None
 
 
-# Singleton instance
+# Singleton instance — uses lazy connection, safe to import without Qdrant running
 vector_store = VectorStore()

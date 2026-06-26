@@ -23,6 +23,15 @@ async def get_task_status(task_id: UUID, db: AsyncSession = Depends(get_db)):
     return task
 
 
+@router.get("/by-story/{story_id}", response_model=TaskStatusResponse)
+async def get_task_by_story(story_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Get the latest task for a story (used to recover task_id after page refresh)."""
+    task = await task_repo.get_task_by_story(db, story_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="No task found for this story")
+    return task
+
+
 @router.websocket("/{task_id}/ws")
 async def task_progress_ws(websocket: WebSocket, task_id: str):
     """WebSocket endpoint for real-time task progress updates."""

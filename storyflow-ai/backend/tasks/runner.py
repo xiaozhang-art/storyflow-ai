@@ -1,10 +1,19 @@
-"""Task runner - executes the story generation workflow with progress tracking and DB persistence."""
+"""Task runner - executes the story generation workflow with progress tracking and DB persistence.
 
+Supports two execution backends:
+1. Agent OS Runtime (v2.0) - with Hook, Memory, Skill, Session, A2A
+2. LangGraph workflow (v1.0) - fallback for backward compatibility
+
+Set USE_RUNTIME=true to use the new Runtime backend.
+"""
+
+import json
 import logging
+import os
 import traceback
 from uuid import UUID
 
-from app.redis import set_task_status
+from app.redis import set_task_status, delete_task_status
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +98,7 @@ async def _persist_characters(story_id: str, characters: list[dict]):
     from sqlalchemy import delete
 
     async with async_session_factory() as db:
+        # Clear old characters for this story
         await db.execute(delete(Character).where(Character.story_id == UUID(story_id)))
 
         for char in characters:
@@ -139,6 +149,7 @@ async def _persist_scenes(story_id: str, scenes: list[dict]):
         for sc in scenes:
             scene = Scene(
                 story_id=UUID(story_id),
+                episode_id=None,  # will be linked if needed
                 scene_no=sc.get("scene_no", 0),
                 prompt=sc.get("prompt", ""),
                 camera=sc.get("camera", "中景"),
@@ -192,6 +203,33 @@ async def _persist_audio_urls(story_id: str, audios: list[dict]):
         logger.info("Updated %d scene audio URLs for story %s", len(audios), story_id)
 
 
+async def _runtime_progress_callback(agent_id: str, progress: dict):
+    """Progress callback for Runtime-based execution."""
+    task_id = progress.get("task_id", "")
+    pct = progress.get("progress", 0)
+    await set_task_status(task_id, {
+        "task_id": task_id,
+        "status": "running",
+        "progress": pct,
+        "current_step": agent_id,
+        "message": f"{agent_id} 完成 (Runtime)",
+    })
+
+
+async def _persist_runtime_results(story_id: str, state: dict):
+    """Persist all intermediate results from a Runtime execution."""
+    if state.get("episodes"):
+        await _persist_episodes(story_id, state["episodes"])
+    if state.get("characters"):
+        await _persist_characters(story_id, state["characters"])
+    if state.get("storyboard"):
+        await _persist_scenes(story_id, state["storyboard"])
+    if state.get("images"):
+        await _persist_image_urls(story_id, state["images"])
+    if state.get("audios"):
+        await _persist_audio_urls(story_id, state["audios"])
+
+
 async def run_story_generation(
     task_id: str,
     story_id: str,
@@ -201,8 +239,58 @@ async def run_story_generation(
     """Run the full story generation workflow with progress tracking and DB persistence.
 
     This is designed to run as a background asyncio task.
+    Supports both Runtime (v2.0) and LangGraph (v1.0) backends.
     """
-    logger.info("Starting generation: task=%s, story=%s", task_id, story_id)
+    use_runtime = os.environ.get("USE_RUNTIME", "false").lower() in ("true", "1", "yes")
+
+    if use_runtime:
+        await _run_with_runtime_backend(task_id, story_id, prompt, genre)
+    else:
+        await _run_with_langgraph_backend(task_id, story_id, prompt, genre)
+
+
+async def _run_with_runtime_backend(task_id, story_id, prompt, genre):
+    """Execute via Agent OS Runtime."""
+    logger.info("Starting Runtime generation: task=%s, story=%s", task_id, story_id)
+
+    try:
+        await _update_progress(task_id, "init")
+        await _update_db_progress(task_id, story_id, "init")
+
+        from workflows.runtime_workflow import run_with_runtime
+
+        result = await run_with_runtime(
+            task_id=task_id,
+            story_id=story_id,
+            prompt=prompt,
+            genre=genre,
+            progress_callback=lambda aid, prog: _runtime_progress_callback(task_id, {
+                **prog, "task_id": task_id,
+            }),
+        )
+
+        # Persist all results
+        await _persist_runtime_results(story_id, result)
+
+        await _update_progress(task_id, "done")
+        await _update_db_progress(task_id, story_id, "done")
+        logger.info("Runtime generation completed: task=%s, story=%s", task_id, story_id)
+
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        logger.error("Runtime generation failed: task=%s, error=%s", task_id, error_msg)
+        logger.error(traceback.format_exc())
+        await set_task_status(task_id, {
+            "task_id": task_id, "status": "failed",
+            "progress": STEP_PROGRESS.get("video", 95),
+            "current_step": "error", "message": error_msg,
+        })
+        await _update_db_progress(task_id, story_id, "init", error=error_msg)
+
+
+async def _run_with_langgraph_backend(task_id, story_id, prompt, genre):
+    """Execute via LangGraph workflow (original backend)."""
+    logger.info("Starting LangGraph generation: task=%s, story=%s", task_id, story_id)
 
     try:
         await _update_progress(task_id, "init")
@@ -244,21 +332,25 @@ async def run_story_generation(
                 output = event_data.get("output")
                 if output and isinstance(output, dict):
                     if name == "script":
+                        # Persist episodes
                         episodes = output.get("episodes", [])
                         if episodes:
                             await _persist_episodes(story_id, episodes)
 
                     elif name == "character":
+                        # Persist enriched characters
                         characters = output.get("characters", [])
                         if characters:
                             await _persist_characters(story_id, characters)
 
                     elif name == "storyboard":
+                        # Persist storyboard scenes
                         scenes = output.get("storyboard", [])
                         if scenes:
                             await _persist_scenes(story_id, scenes)
 
                     elif name == "image":
+                        # Update scene image URLs
                         images = output.get("images", [])
                         if images:
                             await _persist_image_urls(story_id, images)
@@ -268,6 +360,7 @@ async def run_story_generation(
                             )
 
                     elif name == "voice":
+                        # Update scene audio URLs
                         audios = output.get("audios", [])
                         if audios:
                             await _persist_audio_urls(story_id, audios)
@@ -282,6 +375,7 @@ async def run_story_generation(
         if not final_state:
             logger.warning("Streaming did not capture final state, using ainvoke fallback")
             final_state = await workflow.ainvoke(initial_state)
+            # Persist all results after fallback
             if final_state.get("episodes"):
                 await _persist_episodes(story_id, final_state["episodes"])
             if final_state.get("characters"):

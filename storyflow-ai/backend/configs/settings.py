@@ -34,11 +34,33 @@ class Settings(BaseSettings):
     # Storage
     STORAGE_PATH: str = "./storage"
 
-    # ComfyUI
+    # === Agent OS Runtime Settings (v2.0) ===
+
+    # Langfuse (observability)
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+
+    # A2A Transport
+    A2A_TRANSPORT: str = "memory"  # "memory" or "redis"
+
+    # Execution Runtime
+    LLM_WORKER_CONCURRENCY: int = 10
+    TOOL_WORKER_CONCURRENCY: int = 8
+    GPU_WORKER_CONCURRENCY: int = 2
+    MAX_TASK_QUEUE_SIZE: int = 100
+
+    # Session
+    SESSION_IDLE_TIMEOUT: int = 86400  # 24 hours
+
+    # Memory
+    MEMORY_WORKING_TTL: int = 300      # 5 minutes
+    MEMORY_SESSION_TTL: int = 86400    # 24 hours
+    MEMORY_CONFIDENCE_THRESHOLD: float = 0.7
+
+    # === Generation Parameters ===
     COMFYUI_POLL_TIMEOUT: int = 300     # seconds to wait for a single image
     COMFYUI_MAX_RETRIES: int = 2        # retries per image on failure
-
-    # Generation
     MAX_EPISODES: int = 6               # max episodes per story
     SCENES_PER_EPISODE: tuple = (5, 10)  # (min, max) scenes per episode
 

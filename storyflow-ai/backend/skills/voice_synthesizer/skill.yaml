@@ -1,0 +1,14 @@
+skill_id: voice_synthesizer
+name: Voice Synthesizer
+version: "1.0"
+description: Generates character voiceovers using CosyVoice TTS with male/female speaker mapping.
+agent_id: voice
+tools: [cosyvoice_tts]
+tags: [voice, tts, audio, cosyvoice]
+constraints:
+  allowed_formats: ["json"]
+  style: ""
+  forbidden_content: []
+  custom_rules:
+    - "Map character gender to appropriate speaker"
+    - "Preserve emotional tone from script dialogue"

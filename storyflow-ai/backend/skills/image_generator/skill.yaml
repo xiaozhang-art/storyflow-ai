@@ -1,0 +1,16 @@
+skill_id: image_generator
+name: Image Generator
+version: "1.0"
+description: Generates scene images using ComfyUI SDXL with consistent character appearances.
+agent_id: image
+tools: [comfyui_generate]
+tags: [image, generation, sdxl, comfyui]
+constraints:
+  max_output_items: 30
+  allowed_formats: ["json"]
+  style: anime cinematic
+  forbidden_content: []
+  custom_rules:
+    - "Use random seeds per scene for variety"
+    - "Maintain character consistency across all scenes"
+    - "Include full character appearance in each prompt"

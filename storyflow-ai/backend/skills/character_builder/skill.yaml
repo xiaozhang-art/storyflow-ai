@@ -1,0 +1,18 @@
+skill_id: character_builder
+name: Character Builder
+version: "1.0"
+description: Enriches character descriptions with detailed visual appearance for consistent image generation.
+agent_id: character
+tools: []
+tags: [character, design, visual, appearance]
+constraints:
+  max_output_items: 20
+  allowed_formats: ["json"]
+  style: ""
+  forbidden_content: []
+  custom_rules:
+    - "Describe hair style, color, and length"
+    - "Describe body type and height"
+    - "Describe clothing in detail"
+    - "Describe facial features"
+    - "Keep character descriptions consistent across scenes"

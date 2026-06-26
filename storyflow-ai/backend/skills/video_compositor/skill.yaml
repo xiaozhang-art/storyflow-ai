@@ -1,0 +1,15 @@
+skill_id: video_compositor
+name: Video Compositor
+version: "1.0"
+description: Composes final video from scene images and audio using FFmpeg with subtitle generation.
+agent_id: video
+tools: [ffmpeg_create_scene, ffmpeg_concat, ffmpeg_subtitle]
+tags: [video, ffmpeg, composition, subtitle]
+constraints:
+  allowed_formats: ["json"]
+  style: ""
+  forbidden_content: []
+  custom_rules:
+    - "Scene video duration must match audio duration"
+    - "Generate ASS subtitles for all dialogue"
+    - "Use correct time accumulation for subtitle timestamps"

@@ -1,0 +1,17 @@
+skill_id: storyboard_designer
+name: Storyboard Designer
+version: "1.0"
+description: Converts scripts into detailed scene-by-scene storyboards with camera angles and visual descriptions.
+agent_id: storyboard
+tools: []
+tags: [storyboard, scene, camera, visual]
+constraints:
+  max_output_items: 15
+  allowed_formats: ["json"]
+  style: anime cinematic
+  forbidden_content: []
+  custom_rules:
+    - "Each scene must have a clear camera type"
+    - "Include character appearance from character data for consistency"
+    - "Describe lighting and mood for each scene"
+    - "Scene duration should be 3-8 seconds"

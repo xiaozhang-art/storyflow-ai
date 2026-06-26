@@ -1,0 +1,17 @@
+skill_id: script_writer
+name: Script Writer
+version: "1.0"
+description: Generates structured drama scripts with episodes, scenes, and dialogue for AI comic drama production.
+agent_id: script
+tools: []
+tags: [script, drama, writing, story]
+constraints:
+  max_output_items: 10
+  allowed_formats: ["json"]
+  style: ""
+  forbidden_content: []
+  custom_rules:
+    - "Output must be valid JSON"
+    - "Each episode must have at least 3 scenes"
+    - "Characters must be consistent across episodes"
+    - "Include emotional beats and dramatic tension"

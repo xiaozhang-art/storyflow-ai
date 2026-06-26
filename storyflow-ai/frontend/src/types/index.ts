@@ -1,5 +1,6 @@
 /**
  * StoryFlow AI - TypeScript type definitions for API contracts.
+ * These types mirror the backend Pydantic schemas.
  */
 
 // ==================== Story ====================
@@ -8,16 +9,6 @@ export interface StoryCreateRequest {
   title: string;
   prompt: string;
   genre: string;
-}
-
-export interface StoryResponse {
-  id: string;
-  title: string | null;
-  prompt: string | null;
-  genre: string | null;
-  total_episode: number;
-  status: StoryStatus;
-  created_at: string;
 }
 
 export type StoryStatus =
@@ -31,6 +22,20 @@ export type StoryStatus =
   | "completed"
   | "failed";
 
+export interface StoryResponse {
+  id: string;
+  title: string | null;
+  prompt: string | null;
+  genre: string | null;
+  total_episode: number;
+  status: StoryStatus;
+  created_at: string;
+}
+
+export interface StoryListResponse {
+  items: StoryResponse[];
+}
+
 export interface GenerateResponse {
   task_id: string;
   message: string;
@@ -38,12 +43,14 @@ export interface GenerateResponse {
 
 // ==================== Task ====================
 
+export type TaskStatus = "pending" | "running" | "completed" | "failed";
+
 export interface TaskStatusResponse {
   id: string;
   story_id: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: TaskStatus;
   progress: number;
-  current_step: string;
+  current_step: string | null;
   error_message: string | null;
   created_at: string;
 }
@@ -58,11 +65,18 @@ export interface TaskProgressEvent {
 
 // ==================== Result ====================
 
+export interface CharacterAppearance {
+  hair: string;
+  body: string;
+  cloth: string;
+  face: string;
+}
+
 export interface CharacterResult {
   name: string;
   gender: string | null;
   age: number | null;
-  appearance: Record<string, string>;
+  appearance: CharacterAppearance;
   personality: Record<string, string> | null;
   avatar_url: string | null;
 }
@@ -79,7 +93,9 @@ export interface SceneResult {
   prompt: string | null;
   camera: string | null;
   duration: number | null;
+  dialogue: string | null;
   image_url: string | null;
+  audio_url: string | null;
 }
 
 export interface StoryResultResponse {

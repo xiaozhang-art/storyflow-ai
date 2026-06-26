@@ -22,5 +22,6 @@ class Scene(Base, TimestampMixin):
     prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     camera: Mapped[str | None] = mapped_column(String(50), nullable=True)
     duration: Mapped[int] = mapped_column(Integer, default=5)
+    dialogue: Mapped[str | None] = mapped_column(Text, nullable=True)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_url: Mapped[str | None] = mapped_column(Text, nullable=True)

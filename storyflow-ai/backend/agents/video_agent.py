@@ -18,15 +18,15 @@ def _fmt_ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{int(s):02d}.{int((s % 1) * 100):02d}"
 
 
-def _get_audio_duration(audio_path: str) -> float:
-    """Get audio duration in seconds using ffprobe."""
+def _get_media_duration(path: str) -> float:
+    """Get duration in seconds using ffprobe (works for audio and video)."""
     try:
         result = subprocess.run(
             [
                 "ffprobe", "-v", "quiet",
                 "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1",
-                audio_path,
+                path,
             ],
             capture_output=True,
             text=True,
@@ -34,15 +34,22 @@ def _get_audio_duration(audio_path: str) -> float:
         )
         return float(result.stdout.strip())
     except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        logger.warning("Could not get duration for %s, defaulting to 5.0", path)
         return 5.0
 
 
 def _write_ass_file(
     scenes: list[dict],
-    audios_map: dict[int, dict],
+    scene_durations: dict[int, float],
     save_path: Path,
 ) -> None:
-    """Write a complete ASS subtitle file with cumulative timing."""
+    """Write ASS subtitle file with timing based on actual scene video durations.
+
+    Args:
+        scenes: List of storyboard scene dicts.
+        scene_durations: Map of scene_no -> actual duration in seconds.
+        save_path: Output path for the .ass file.
+    """
     ass_header = """\
 [Script Info]
 Title: StoryFlow AI Subtitles
@@ -64,17 +71,14 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     for scene in scenes:
         scene_no = scene.get("scene_no", 0)
         dialogue = scene.get("dialogue", "")
-        if not dialogue.strip():
-            # Still advance time for scenes without dialogue
-            cumulative_time += float(scene.get("duration", 5))
-            continue
 
-        # Determine duration from audio if available, otherwise from storyboard
-        duration = float(scene.get("duration", 5))
-        if scene_no in audios_map:
-            audio_path = audios_map[scene_no].get("audio_path", "")
-            if audio_path and Path(audio_path).exists():
-                duration = _get_audio_duration(audio_path)
+        # Use actual duration from the generated video, fallback to storyboard value
+        duration = scene_durations.get(scene_no, float(scene.get("duration", 5)))
+
+        if not dialogue.strip():
+            # No subtitle for this scene, but still advance time
+            cumulative_time += duration
+            continue
 
         start = _fmt_ass_time(cumulative_time)
         end = _fmt_ass_time(cumulative_time + duration)
@@ -94,7 +98,10 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
     save_path.write_text(ass_header + "\n".join(events), encoding="utf-8")
-    logger.info("ASS subtitles written: %d dialogue lines, total %.1fs", len(events), cumulative_time)
+    logger.info(
+        "ASS subtitles written: %d dialogue lines, total %.1fs",
+        len(events), cumulative_time,
+    )
 
 
 async def _create_scene_video(
@@ -102,11 +109,15 @@ async def _create_scene_video(
     image_path: str,
     audio_path: str | None,
     output_path: Path,
-) -> bool:
-    """Create a video for a single scene using ffmpeg."""
+) -> tuple[bool, float]:
+    """Create a video for a single scene using ffmpeg.
+
+    Returns:
+        (success, actual_duration) - the real duration of the output video.
+    """
     if not Path(image_path).exists():
         logger.warning("Image not found, skipping scene %d: %s", scene_no, image_path)
-        return False
+        return False, 0.0
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -140,21 +151,24 @@ async def _create_scene_video(
 
         if proc.returncode != 0:
             logger.error("ffmpeg failed for scene %d: %s", scene_no, stderr.decode())
-            return False
+            return False, 0.0
 
-        return True
+        # Measure actual video duration
+        actual_duration = _get_media_duration(str(output_path))
+        logger.info("Scene %d video: %.1fs", scene_no, actual_duration)
+        return True, actual_duration
 
     except asyncio.TimeoutError:
         logger.error("ffmpeg timed out for scene %d", scene_no)
-        return False
+        return False, 0.0
 
 
 async def video_agent(state: StoryState) -> dict:
     """
     Video assembly agent.
     For each scene, creates a video clip from the generated image and audio
-    using ffmpeg. Then generates ASS subtitles with cumulative timing and
-    finally concatenates all scene clips into a single story video.
+    using ffmpeg. Then generates ASS subtitles with timing based on actual
+    scene video durations, burns subtitles, and concatenates into final MP4.
     """
     logger.info(
         "video_agent started | task_id=%s story_id=%s",
@@ -187,8 +201,10 @@ async def video_agent(state: StoryState) -> dict:
     image_map: dict[int, dict] = {img["scene_no"]: img for img in images}
     audio_map: dict[int, dict] = {aud["scene_no"]: aud for aud in audios}
 
-    # --- Step 1: Create per-scene video clips ---
+    # --- Step 1: Create per-scene video clips, track actual durations ---
     scene_videos: list[Path] = []
+    scene_durations: dict[int, float] = {}  # scene_no -> actual duration
+
     for scene in storyboard:
         scene_no = scene.get("scene_no", 0)
         img_info = image_map.get(scene_no)
@@ -201,13 +217,14 @@ async def video_agent(state: StoryState) -> dict:
         audio_path = aud_info.get("audio_path") if aud_info else None
 
         scene_video_path = scenes_dir / f"scene_{scene_no}.mp4"
-        success = await _create_scene_video(
+        success, duration = await _create_scene_video(
             scene_no, image_path, audio_path, scene_video_path
         )
 
         if success and scene_video_path.exists():
             scene_videos.append(scene_video_path)
-            logger.info("Scene video created: %s", scene_video_path)
+            scene_durations[scene_no] = duration
+            logger.info("Scene video created: %s (%.1fs)", scene_video_path, duration)
         else:
             logger.warning("Failed to create video for scene %d", scene_no)
 
@@ -221,9 +238,9 @@ async def video_agent(state: StoryState) -> dict:
             "video_path": "",
         }
 
-    # --- Step 2: Generate ASS subtitle file (with cumulative timing) ---
+    # --- Step 2: Generate ASS subtitle file (timed by actual video durations) ---
     ass_path = video_dir / "subtitles.ass"
-    _write_ass_file(storyboard, audio_map, ass_path)
+    _write_ass_file(storyboard, scene_durations, ass_path)
     logger.info("Subtitles written to %s", ass_path)
 
     # --- Step 3: Burn subtitles into each scene video ---

@@ -1,64 +1,37 @@
-"""Storyboard Agent - converts script to scene-by-scene storyboard."""
+"""Storyboard Agent - converts script to scene-by-scene storyboard with structured output."""
 
 import json
 import logging
+from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import PydanticOutputParser
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from pydantic import BaseModel, Field
+
+from prompts import STORYBOARD_SYSTEM_PROMPT, STORYBOARD_USER_PROMPT
 from utils.json_helper import parse_json_response
 from workflows.state import StoryState
 from app.llm import get_precise_llm
+from configs.settings import settings
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-你是一位资深动画分镜师，擅长将剧本拆解为精确的分镜脚本。
-你需要根据每集的剧本内容，生成逐场景的分镜描述，每个场景将用于AI图像生成。
 
-分镜原则：
-1. **镜头语言**：合理运用远景、中景、近景、特写、俯拍、仰拍等镜头
-2. **场景切换**：每个场景之间要有自然的过渡逻辑
-3. **角色一致性**：场景描述中必须精确引用角色外观，确保AI生成图像时角色形象一致
-4. **时长合理**：每个场景3-8秒，对话场景适当延长
-5. **画面构图**：每个场景的prompt要包含画面构图、光影、色调等细节
+class StoryboardScene(BaseModel):
+    """A single storyboard scene."""
+    scene: int = Field(description="场景序号（从1开始）")
+    camera: str = Field(default="中景", description="镜头类型")
+    duration: int = Field(default=5, ge=3, le=15, description="场景时长（秒）")
+    prompt: str = Field(description="英文图像生成 prompt")
+    characters: list[str] = Field(default_factory=list, description="出场角色名")
+    dialogue: str = Field(default="", description="该场景台词")
 
-可用镜头类型：
-- 远景（wide shot）：展示环境和氛围
-- 中景（medium shot）：展示人物上半身和互动
-- 近景（close-up）：展示人物面部表情
-- 特写（extreme close-up）：展示细节（眼睛、手、物品）
-- 俯拍（high angle shot）：从上往下看
-- 仰拍（low angle shot）：从下往上看
 
-输出必须是合法JSON数组，每个元素格式：
-{"scene": 1, "camera": "中景", "duration": 5, "prompt": "英文图像生成prompt", "characters": ["角色A"], "dialogue": "台词"}
-"""
-
-USER_PROMPT_TEMPLATE = """\
-请为以下剧集生成分镜脚本：
-
-## 剧集信息
-第{episode_no}集：{title}
-剧情概要：{summary}
-
-## 完整剧本
-{script}
-
-## 角色外观参考（请严格保持一致）
-{character_descriptions}
-
-## 要求
-1. 根据剧本内容，将每个关键场景拆分为独立的分镜
-2. 每个场景的prompt必须用英文编写，格式为：
-   "anime style, [镜头类型], [场景环境描述], [角色外观描述], [动作/表情描述], [光影/氛围], high quality, detailed"
-3. 角色外观必须完整引用上面的参考信息
-4. 每个场景的dialogue字段填写该场景对应的台词，无台词则为空字符串
-5. 每集生成5-10个场景
-
-请直接输出JSON数组，不要包含其他文字。
-"""
+class StoryboardOutput(BaseModel):
+    """Pydantic model for structured storyboard output."""
+    scenes: list[StoryboardScene]
 
 
 def _build_character_descriptions(characters: list[dict]) -> str:
@@ -79,21 +52,16 @@ def _build_character_descriptions(characters: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _validate_scenes(scenes: list[dict]) -> list[dict]:
-    """Validate and normalize scene data."""
-    valid = []
-    for i, scene in enumerate(scenes):
-        if not isinstance(scene, dict):
-            continue
-        valid.append({
-            "scene": scene.get("scene", i + 1),
-            "camera": scene.get("camera", "中景"),
-            "duration": max(3, min(15, int(scene.get("duration", 5)))),
-            "prompt": scene.get("prompt", ""),
-            "characters": scene.get("characters", []),
-            "dialogue": scene.get("dialogue", ""),
-        })
-    return valid
+def _normalize_scene(scene: dict, index: int) -> dict:
+    """Normalize a single scene dict to the expected format."""
+    return {
+        "scene_no": scene.get("scene", index + 1),
+        "camera": scene.get("camera", "中景"),
+        "duration": max(3, min(15, int(scene.get("duration", 5)))),
+        "prompt": scene.get("prompt", ""),
+        "characters": scene.get("characters", []),
+        "dialogue": scene.get("dialogue", ""),
+    }
 
 
 @retry(
@@ -107,39 +75,66 @@ def _validate_scenes(scenes: list[dict]) -> list[dict]:
 async def _generate_storyboard_for_episode(
     episode: dict,
     character_descriptions: str,
-    llm: ChatOpenAI,
+    llm,
 ) -> list[dict]:
-    """Generate storyboard scenes for a single episode with retry."""
+    """Generate storyboard scenes for a single episode with retry.
+
+    Tries PydanticOutputParser first (structured output). If that fails,
+    falls back to raw JSON parsing with validation.
+    """
+    min_scenes, max_scenes = settings.SCENES_PER_EPISODE
+
     chat_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", USER_PROMPT_TEMPLATE),
+        ("system", STORYBOARD_SYSTEM_PROMPT),
+        ("human", STORYBOARD_USER_PROMPT),
     ])
 
-    chain = chat_prompt | llm
+    # Strategy 1: PydanticOutputParser for guaranteed structure
+    try:
+        parser = PydanticOutputParser(pydantic_object=StoryboardOutput)
+        chain = chat_prompt | llm | parser
 
+        result = await chain.ainvoke({
+            "episode_no": episode.get("episode_no", 1),
+            "title": episode.get("title", ""),
+            "summary": episode.get("summary", ""),
+            "script": episode.get("script", ""),
+            "character_descriptions": character_descriptions,
+            "min_scenes": min_scenes,
+            "max_scenes": max_scenes,
+            "format_instructions": parser.get_format_instructions(),
+        })
+
+        scenes = [_normalize_scene(s.model_dump(), i) for i, s in enumerate(result.scenes)]
+        if scenes:
+            logger.debug("Storyboard parsed via PydanticOutputParser (%d scenes)", len(scenes))
+            return scenes
+    except Exception as e:
+        logger.warning("PydanticOutputParser failed, falling back to raw JSON: %s", e)
+
+    # Strategy 2: Raw LLM output + json_helper parsing
+    chain = chat_prompt | llm
     response = await chain.ainvoke({
         "episode_no": episode.get("episode_no", 1),
         "title": episode.get("title", ""),
         "summary": episode.get("summary", ""),
         "script": episode.get("script", ""),
         "character_descriptions": character_descriptions,
+        "min_scenes": min_scenes,
+        "max_scenes": max_scenes,
+        "format_instructions": "",
     })
 
     raw_text = response.content.strip()
-    scenes = parse_json_response(raw_text)
+    parsed = parse_json_response(raw_text)
 
-    if not isinstance(scenes, list):
-        # Wrap single object in list
-        scenes = [scenes] if isinstance(scenes, dict) else []
+    # Handle both list and single object
+    if isinstance(parsed, dict) and "scenes" in parsed:
+        parsed = parsed["scenes"]
+    if not isinstance(parsed, list):
+        parsed = [parsed] if isinstance(parsed, dict) else []
 
-    # Validate
-    scenes = _validate_scenes(scenes)
-
-    # Tag each scene with its episode number
-    for scene in scenes:
-        scene["episode_no"] = episode.get("episode_no", 1)
-
-    return scenes
+    return [_normalize_scene(s, i) for i, s in enumerate(parsed)]
 
 
 async def storyboard_agent(state: StoryState) -> dict:
@@ -165,7 +160,6 @@ async def storyboard_agent(state: StoryState) -> dict:
             raise ValueError("No characters found in state.")
 
         character_descriptions = _build_character_descriptions(characters)
-
         llm = get_precise_llm()
 
         all_scenes: list[dict] = []
@@ -183,6 +177,9 @@ async def storyboard_agent(state: StoryState) -> dict:
         # Assign global scene number
         for idx, scene in enumerate(all_scenes, 1):
             scene["scene_no"] = idx
+            scene["episode_no"] = scene.get("episode_no",
+                                            episodes[0].get("episode_no", 1)
+                                            if episodes else 1)
 
         logger.info(
             "storyboard_agent completed | %d total scenes | task_id=%s",

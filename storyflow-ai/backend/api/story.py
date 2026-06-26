@@ -116,7 +116,9 @@ async def get_story_result(story_id: UUID, db: AsyncSession = Depends(get_db)):
                 "prompt": sc.prompt,
                 "camera": sc.camera,
                 "duration": sc.duration,
+                "dialogue": sc.dialogue,
                 "image_url": sc.image_url,
+                "audio_url": sc.audio_url,
             }
             for sc in scenes
         ],

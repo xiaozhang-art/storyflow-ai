@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Card, Button, Typography, Tabs, Image, Row, Col,
-  Space, Spin, Result, Empty, Tag, Descriptions,
+  Space, Spin, Result, Empty, Tag, Descriptions, Tooltip,
 } from 'antd';
 import {
   DownloadOutlined, ArrowLeftOutlined, UserOutlined, VideoCameraOutlined,
+  SoundOutlined, PictureOutlined,
 } from '@ant-design/icons';
 import { getStoryResult } from '../api';
-import type { StoryResultResponse } from '../types';
+import type { StoryResultResponse, SceneResult, CharacterResult } from '../types';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -46,17 +47,26 @@ const ResultPage: React.FC = () => {
 
   const scriptTab = {
     key: 'script',
-    label: <Space>剧本</Space>,
+    label: <span>剧本 ({data.episodes.length}集)</span>,
     children: (
       <div style={{ padding: '8px 0' }}>
         {data.episodes.length > 0 ? (
           data.episodes.map((ep) => (
-            <Card key={ep.episode_no} size="small" style={{ marginBottom: 16 }} title={`第${ep.episode_no}集：${ep.title || ''}`}>
-              {ep.summary && <Paragraph type="secondary" style={{ marginBottom: 8 }}>{ep.summary}</Paragraph>}
-              {ep.script && (
-                <Paragraph style={{ fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap', margin: 0 }}>
-                  {ep.script}
+            <Card key={ep.episode_no} size="small" style={{ marginBottom: 16 }}
+              title={<span>第{ep.episode_no}集：{ep.title || '未命名'}</span>}>
+              {ep.summary && (
+                <Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                  {ep.summary}
                 </Paragraph>
+              )}
+              {ep.script && (
+                <div style={{
+                  background: '#fafafa', padding: '12px 16px', borderRadius: 8,
+                  fontSize: 14, lineHeight: 1.9, whiteSpace: 'pre-wrap', maxHeight: 400,
+                  overflow: 'auto',
+                }}>
+                  {ep.script}
+                </div>
               )}
             </Card>
           ))
@@ -67,30 +77,71 @@ const ResultPage: React.FC = () => {
 
   const storyboardTab = {
     key: 'scenes',
-    label: <Space>分镜</Space>,
+    label: <span>分镜 ({data.scenes.length}镜)</span>,
     children: (
       <div style={{ padding: '8px 0' }}>
         {data.scenes.length > 0 ? (
           <Row gutter={[16, 16]}>
             {data.scenes.map((scene) => (
-              <Col xs={24} sm={12} md={8} key={scene.scene_no}>
-                <Card size="small"
+              <Col xs={24} sm={12} lg={8} key={scene.scene_no}>
+                <Card size="small" hoverable
                   cover={
                     scene.image_url ? (
-                      <Image alt={`场景 ${scene.scene_no}`} src={scene.image_url}
-                        style={{ height: 200, objectFit: 'cover' }} preview />
+                      <div style={{ position: 'relative', height: 200, overflow: 'hidden' }}>
+                        <Image
+                          alt={`场景 ${scene.scene_no}`}
+                          src={scene.image_url}
+                          style={{ height: 200, objectFit: 'cover' }}
+                          preview
+                        />
+                      </div>
                     ) : (
-                      <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f0f0f0', color: '#999' }}>
-                        暂无图片
+                      <div style={{
+                        height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: '#f5f5f5', color: '#bbb', flexDirection: 'column', gap: 8,
+                      }}>
+                        <PictureOutlined style={{ fontSize: 32 }} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>图片缺失</Text>
                       </div>
                     )
                   }
+                  actions={[
+                    scene.audio_url ? (
+                      <Tooltip title="已生成配音" key="audio">
+                        <SoundOutlined style={{ color: '#52c41a' }} />
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title="未生成配音" key="audio">
+                        <SoundOutlined style={{ color: '#d9d9d9' }} />
+                      </Tooltip>
+                    ),
+                    scene.dialogue ? (
+                      <Tooltip title={scene.dialogue} key="dialogue">
+                        <span style={{ fontSize: 12, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', whiteSpace: 'nowrap' }}>
+                          {scene.dialogue}
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <span style={{ color: '#d9d9d9', fontSize: 12 }} key="dialogue">无台词</span>
+                    ),
+                  ]}
                 >
-                  <Space>
-                    <Tag color="blue">场景 {scene.scene_no}</Tag>
+                  <Space size={4} wrap style={{ marginBottom: 8 }}>
+                    <Tag color="blue">#{scene.scene_no}</Tag>
                     {scene.camera && <Tag>{scene.camera}</Tag>}
                     {scene.duration && <Tag>{scene.duration}s</Tag>}
                   </Space>
+                  {scene.prompt && (
+                    <Tooltip title={scene.prompt}>
+                      <Paragraph
+                        type="secondary"
+                        ellipsis={{ rows: 2 }}
+                        style={{ fontSize: 12, marginBottom: 0, lineHeight: 1.6 }}
+                      >
+                        {scene.prompt}
+                      </Paragraph>
+                    </Tooltip>
+                  )}
                 </Card>
               </Col>
             ))}
@@ -102,33 +153,14 @@ const ResultPage: React.FC = () => {
 
   const characterTab = {
     key: 'characters',
-    label: <Space>角色</Space>,
+    label: <span>角色 ({data.characters.length})</span>,
     children: (
       <div style={{ padding: '8px 0' }}>
         {data.characters.length > 0 ? (
           <Row gutter={[16, 16]}>
             {data.characters.map((char, idx) => (
               <Col xs={24} sm={12} md={8} key={idx}>
-                <Card hoverable style={{ textAlign: 'center' }}>
-                  <div style={{ width: 100, height: 100, borderRadius: '50%', background: '#e6f4ff',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
-                    <UserOutlined style={{ fontSize: 36, color: '#1677ff' }} />
-                  </div>
-                  <Title level={5} style={{ marginBottom: 8 }}>{char.name}</Title>
-                  <Descriptions column={1} size="small" style={{ textAlign: 'left' }}>
-                    {char.gender && <Descriptions.Item label="性别">{char.gender}</Descriptions.Item>}
-                    {char.age && <Descriptions.Item label="年龄">{char.age}</Descriptions.Item>}
-                  </Descriptions>
-                  {char.appearance && Object.keys(char.appearance).length > 0 && (
-                    <div style={{ marginTop: 8, textAlign: 'left' }}>
-                      {Object.entries(char.appearance).map(([k, v]) => (
-                        <Text key={k} type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                          {k}: {v}
-                        </Text>
-                      ))}
-                    </div>
-                  )}
-                </Card>
+                <CharacterCard char={char} />
               </Col>
             ))}
           </Row>
@@ -151,12 +183,16 @@ const ResultPage: React.FC = () => {
           <Space>
             {data.genre && <Tag color="blue">{data.genre}</Tag>}
             <Tag color="green">已完成</Tag>
+            <Tag>{data.episodes.length}集</Tag>
+            <Tag>{data.scenes.length}镜</Tag>
           </Space>
         </div>
 
         {data.video_url ? (
           <div>
-            <video controls style={{ width: '100%', maxWidth: 720, borderRadius: 8, display: 'block', margin: '0 auto' }} src={data.video_url}>
+            <video controls playsInline
+              style={{ width: '100%', maxWidth: 720, borderRadius: 8, display: 'block', margin: '0 auto' }}
+              src={data.video_url}>
               您的浏览器不支持视频播放
             </video>
             <div style={{ textAlign: 'center', marginTop: 16 }}>
@@ -179,6 +215,39 @@ const ResultPage: React.FC = () => {
         <Tabs items={[scriptTab, storyboardTab, characterTab]} defaultActiveKey="script" size="large" />
       </Card>
     </div>
+  );
+};
+
+/** Character display card with appearance details. */
+const CharacterCard: React.FC<{ char: CharacterResult }> = ({ char }) => {
+  const appearance = char.appearance && typeof char.appearance === 'object'
+    ? char.appearance
+    : { hair: '', body: '', cloth: '', face: '' };
+
+  const hasAppearance = Object.values(appearance).some(v => v && v.trim());
+
+  return (
+    <Card hoverable style={{ textAlign: 'center' }}>
+      <div style={{
+        width: 100, height: 100, borderRadius: '50%', background: '#e6f4ff',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px',
+      }}>
+        <UserOutlined style={{ fontSize: 36, color: '#1677ff' }} />
+      </div>
+      <Title level={5} style={{ marginBottom: 8 }}>{char.name}</Title>
+      <Descriptions column={1} size="small" style={{ textAlign: 'left' }}>
+        {char.gender && <Descriptions.Item label="性别">{char.gender}</Descriptions.Item>}
+        {char.age && <Descriptions.Item label="年龄">{char.age}</Descriptions.Item>}
+      </Descriptions>
+      {hasAppearance && (
+        <div style={{ marginTop: 8, textAlign: 'left' }}>
+          {appearance.hair && <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>发型: {appearance.hair}</Text>}
+          {appearance.face && <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>五官: {appearance.face}</Text>}
+          {appearance.body && <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>体型: {appearance.body}</Text>}
+          {appearance.cloth && <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>服装: {appearance.cloth}</Text>}
+        </div>
+      )}
+    </Card>
   );
 };
 

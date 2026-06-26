@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
   StoryCreateRequest,
   StoryResponse,
+  StoryListResponse,
   GenerateResponse,
   TaskStatusResponse,
   TaskProgressEvent,
@@ -29,10 +30,10 @@ export async function getStory(id: string): Promise<StoryResponse> {
 }
 
 export async function listStories(skip = 0, limit = 20): Promise<StoryResponse[]> {
-  const response = await api.get<StoryResponse[]>('/story', {
+  const response = await api.get<StoryListResponse>('/story', {
     params: { skip, limit },
   });
-  return response.data;
+  return response.data.items;
 }
 
 export async function startGeneration(storyId: string): Promise<GenerateResponse> {
@@ -69,6 +70,14 @@ export function connectWebSocket(
     } catch {
       console.error('Failed to parse WebSocket message', event.data);
     }
+  };
+
+  ws.onerror = (event) => {
+    console.error('WebSocket error', event);
+  };
+
+  ws.onclose = () => {
+    console.debug('WebSocket closed for task', taskId);
   };
 
   return ws;

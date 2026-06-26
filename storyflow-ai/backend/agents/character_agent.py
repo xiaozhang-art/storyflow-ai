@@ -2,56 +2,42 @@
 
 import json
 import logging
+from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import PydanticOutputParser
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from pydantic import BaseModel, Field
+
+from prompts import CHARACTER_SYSTEM_PROMPT, CHARACTER_USER_PROMPT
 from workflows.state import StoryState
 from app.llm import get_precise_llm
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-你是一位专业的角色视觉设计师，专门为AI图像生成系统（如Stable Diffusion、Midjourney）编写精确的角色外观描述。
-你需要根据角色基本信息，为每个角色生成详细的视觉描述卡片，确保：
-1. 外观描述足够详细，可以用于AI图像生成
-2. 每个角色的视觉特征具有高度辨识度
-3. 描述用词精确，避免模糊表达
-4. 所有描述最终会转为英文 prompt，所以细节要具体到可被 SD 理解
-"""
 
-USER_PROMPT_TEMPLATE = """\
-请为以下角色生成详细的视觉描述卡片：
+class AppearanceCard(BaseModel):
+    """Structured visual description for SD image generation."""
+    hair: str = Field(default="", description="发型、发色、长度（英文）")
+    body: str = Field(default="", description="身高、体型、体态（英文）")
+    cloth: str = Field(default="", description="服装风格、穿着、配饰（英文）")
+    face: str = Field(default="", description="五官、肤色、标记（英文）")
 
-{character_list}
 
-请确保每个角色的外观描述包含以下四个维度：
-- hair：发型、发色、长度、特殊造型（英文描述）
-- body：身高、体型、体态特征（英文描述）
-- cloth：服装风格、具体穿着、配饰（英文描述）
-- face：五官特征、肤色、特殊标记（英文描述）
-
-同时为每个角色补充：
-- personality：性格特征的中文描述（字符串）
-- catchphrase：一句经典口头禅（中文）
-
-{format_instructions}
-"""
+class EnrichedCharacter(BaseModel):
+    """A single enriched character."""
+    name: str
+    gender: str = "unknown"
+    age: int | None = None
+    appearance: AppearanceCard
+    personality: dict[str, Any] = Field(default_factory=dict)
+    catchphrase: str = ""
 
 
 class EnrichedCharacterOutput(BaseModel):
     """Pydantic model for LLM structured output of character enrichment."""
-    characters: list[dict]
-
-
-# Avoid circular import - define locally
-from pydantic import BaseModel as _BaseModel
-
-
-class EnrichedCharacterOutput(_BaseModel):
-    characters: list[dict]
+    characters: list[EnrichedCharacter]
 
 
 @retry(
@@ -68,8 +54,8 @@ async def _enrich_characters(characters: list[dict]) -> list[dict]:
     parser = PydanticOutputParser(pydantic_object=EnrichedCharacterOutput)
 
     chat_prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", USER_PROMPT_TEMPLATE),
+        ("system", CHARACTER_SYSTEM_PROMPT),
+        ("human", CHARACTER_USER_PROMPT),
     ])
 
     chain = chat_prompt | llm | parser
@@ -92,18 +78,31 @@ async def _enrich_characters(characters: list[dict]) -> list[dict]:
         "format_instructions": parser.get_format_instructions(),
     })
 
-    enriched_characters = result.characters
+    # Convert Pydantic models to plain dicts
+    enriched_list = []
+    for ec in result.characters:
+        enriched_list.append({
+            "name": ec.name,
+            "gender": ec.gender,
+            "age": ec.age,
+            "appearance": ec.appearance.model_dump(),
+            "personality": ec.personality,
+            "catchphrase": ec.catchphrase,
+        })
 
     # Merge with original character data to preserve any fields not overwritten
     merged = []
-    for original, enriched in zip(characters, enriched_characters):
+    for original, enriched in zip(characters, enriched_list):
         merged_char = {**original, **enriched}
-        # Ensure appearance is a dict with all four keys
+        # Ensure appearance has all four keys
         appearance = merged_char.get("appearance", {})
         if isinstance(appearance, str):
             appearance = {"hair": "", "body": "", "cloth": "", "face": appearance}
-        for key in ("hair", "body", "cloth", "face"):
-            appearance.setdefault(key, "")
+        elif isinstance(appearance, dict):
+            for key in ("hair", "body", "cloth", "face"):
+                appearance.setdefault(key, "")
+        else:
+            appearance = {"hair": "", "body": "", "cloth": "", "face": ""}
         merged_char["appearance"] = appearance
         merged.append(merged_char)
 

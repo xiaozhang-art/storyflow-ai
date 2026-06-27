@@ -103,10 +103,29 @@ curl -X POST /api/story/{id}/resume
 Agent → Capability → Workspace → Quality → Hook → EventBus → Next Agent
 ```
 
-**ProjectRuntime** 是顶层编排器，每个 Project 拥有独立实例：
+**ProjectRuntime** 是顶层编排器，每个 Project 拥有独立实例。v3.1 引入两个新的核心模型：
+
+**StoryContext** — 故事全局状态，所有 Agent 的共享读写空间。扩展 StoryWorld，加入所有产出物引用和运行时变量。Agent 不自己存状态，而是读写 StoryContext（类似 Git 仓库）。
+
+**Blackboard** — 共享任务黑板。Agent 不直接互相调用，而是通过 Blackboard 交换任务。任务有依赖关系形成 DAG，Engine 只投递「依赖已满足」的任务。类似车间黑板：任务写上去 → 对应 Agent 看到 → 领取执行 → 标记完成。
 
 ```
 ProjectRuntime
+│
+├── StoryContext        故事全局状态（StoryWorld + 产出物 + 变量）
+├── Blackboard          共享任务黑板（DAG 调度）
+├── Workspace           文件管理 (按 project/episode/scene 组织)
+├── CheckpointStore     存档 / 恢复
+├── QualityEngine       质量审核 (7 个 Checker)
+├── CapabilityRegistry  能力驱动 (云端 API + Mock)
+├── HookManager         生命周期扩展 (16 种事件)
+└── EventBus            事件总线
+```
+
+**ProjectRuntime** 是顶层编排器，每个 Project 拥有独立实例：
+
+```
+ProjectRuntime (详细组件)
 │
 ├── StoryWorld          结构化世界模型 (Story Bible + Character + Location + Timeline)
 ├── Workspace           文件管理 (按 project/episode/scene 组织)

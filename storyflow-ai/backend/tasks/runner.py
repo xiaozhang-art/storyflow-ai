@@ -14,8 +14,8 @@ from app.redis import set_task_status
 logger = logging.getLogger(__name__)
 
 STEP_PROGRESS = {
-    "init": 0, "script": 10, "character": 25, "storyboard": 40,
-    "image": 65, "voice": 80, "video": 95, "done": 100,
+    "init": 0, "script": 10, "character": 22, "storyboard": 35,
+    "image": 50, "image_to_video": 70, "voice": 85, "video": 95, "done": 100,
 }
 
 STEP_MESSAGE = {
@@ -24,14 +24,16 @@ STEP_MESSAGE = {
     "character": "正在设计角色...",
     "storyboard": "正在生成分镜...",
     "image": "正在生成图片 ({current}/{total})...",
+    "image_to_video": "正在生成视频片段 ({current}/{total})...",
     "voice": "正在生成配音 ({current}/{total})...",
-    "video": "正在合成视频...",
+    "video": "正在合成最终视频...",
     "done": "漫剧生成完成！",
 }
 
 STEP_STORY_STATUS = {
     "init": "generating", "script": "script_done", "character": "character_done",
     "storyboard": "storyboard_done", "image": "image_done",
+    "image_to_video": "i2v_done",
     "voice": "voice_done", "video": "completed",
 }
 
@@ -166,11 +168,13 @@ async def run_story_generation(task_id: str, story_id: str, prompt: str, genre: 
         from agents.character_agent import character_agent
         from agents.storyboard_agent import storyboard_agent
         from agents.image_agent import image_agent
+        from agents.image_to_video_agent import image_to_video_agent
         from agents.voice_agent import voice_agent
         from agents.video_agent import video_agent
 
         for step, agent in [("script", script_agent), ("character", character_agent),
                             ("storyboard", storyboard_agent), ("image", image_agent),
+                            ("image_to_video", image_to_video_agent),
                             ("voice", voice_agent), ("video", video_agent)]:
             runtime.register_agent(step, agent)
 

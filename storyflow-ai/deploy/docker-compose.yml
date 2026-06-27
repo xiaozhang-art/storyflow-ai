@@ -35,12 +35,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://storyflow:postgres:5432/storyflow
+      DATABASE_URL: postgresql+asyncpg://storyflow:storyflow@postgres:5432/storyflow
       REDIS_URL: redis://redis:6379/0
-      LLM_API_KEY: ${LLM_API_KEY}
-      COMFYUI_URL: http://host.docker.internal:8188
-      COSYVOICE_URL: http://host.docker.internal:50000
       STORAGE_PATH: /app/storage
     volumes:
       - storage_data:/app/storage

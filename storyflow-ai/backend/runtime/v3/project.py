@@ -365,7 +365,7 @@ class ProjectRuntime:
             world_snapshot=self.world.to_dict(),
             artifacts={
                 k: v for k, v in state.items()
-                if k in ("episodes", "characters", "storyboard", "images", "voices", "video_path")
+                if k in ("episodes", "characters", "storyboard", "images", "video_clips", "audios", "video_path", "video_url")
             },
             episode=self.project.current_episode,
         )

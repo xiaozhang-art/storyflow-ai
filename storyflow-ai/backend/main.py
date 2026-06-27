@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="3.0.0",
+    version="3.1.0",
     description="AI 漫剧自动生成平台 — Project Runtime",
     lifespan=lifespan,
 )

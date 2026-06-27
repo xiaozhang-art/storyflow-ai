@@ -56,8 +56,8 @@ class PipelineStep:
     quality_checkers: list[str] | None = None  # None = use defaults
 
 
-# The standard 6-step pipeline
-STANDARD_PIPELINE = ["script", "character", "storyboard", "image", "voice", "video"]
+# The standard 7-step pipeline (v3.1: added image_to_video for 漫剧)
+STANDARD_PIPELINE = ["script", "character", "storyboard", "image", "image_to_video", "voice", "video"]
 
 
 @dataclass
@@ -194,8 +194,11 @@ class ProjectRuntime:
             "characters": [],
             "storyboard": [],
             "images": [],
+            "video_clips": [],
             "voices": [],
+            "audios": [],
             "video_path": "",
+            "video_url": "",
             "status": "running",
         }
 

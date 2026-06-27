@@ -1,37 +1,34 @@
-"""Capability Registry — Agent 不直接写死调用 ComfyUI/CosyVoice.
+"""Capability Registry — Agent 不直接调用任何外部服务.
 
 核心思想：
 - Agent 只声明"我需要什么能力"
-- Runtime 根据配置选择具体实现
-- 新 Agent 直接组合已有 Capability
-- 以后换 SD → FLUX，只改 Capability 实现，不动 Agent
+- Runtime 根据配置选择具体实现（云端 API 或 Mock）
+- 换服务商只改 Capability 实现，不动 Agent
 
-Example:
-    # Agent 代码
-    image_prompt = await self.use_capability("generate_image", {
-        "prompt": "...",
-        "width": 1024,
-        "height": 1024,
-    })
-
-    # Runtime 注册
-    registry.register("generate_image", ComfyUICapability())
-    # 以后换成 FLUX:
-    registry.register("generate_image", FluxCapability())
+支持的 Provider:
+  文生图: dashscope(通义万相), openai(DALL·E), replicate, mock
+  图生视频: kling(可灵), runway, pika, mock
+  TTS: dashscope_tts, cosyvoice_cloud, azure, mock
+  视频拼接: ffmpeg (本地)
 """
+
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
+import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable
+from typing import Any
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────
-# Capability Definition
+# Capability Base
 # ──────────────────────────────────────────────
 
 class Capability(ABC):
@@ -45,214 +42,156 @@ class Capability(ABC):
     def description(self) -> str:
         return ""
 
-    @property
-    def input_schema(self) -> dict:
-        """JSON Schema 描述输入参数."""
-        return {}
-
-    @property
-    def output_schema(self) -> dict:
-        """JSON Schema 描述输出."""
-        return {"type": "object"}
-
     @abstractmethod
     async def execute(self, params: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-        """执行能力.
-
-        Args:
-            params: 输入参数
-            context: 上下文（包含 StoryWorld, Workspace, Project 等）
-
-        Returns:
-            执行结果
-        """
         ...
 
 
 # ──────────────────────────────────────────────
-# Built-in Capabilities
+# 1. Text-to-Image
 # ──────────────────────────────────────────────
 
-class GenerateImageCapability(Capability):
-    """图像生成能力 — 默认使用 ComfyUI."""
-
-    def __init__(self, comfyui_url: str | None = None):
-        from configs.settings import settings
-        self.url = comfyui_url or settings.COMFYUI_URL
-        self.poll_timeout = settings.COMFYUI_POLL_TIMEOUT
-        self.max_retries = settings.COMFYUI_MAX_RETRIES
+class DashscopeImageCapability(Capability):
+    """文生图 — 通义万相 (DashScope WANx)."""
 
     @property
     def description(self) -> str:
-        return "Generate images using Stable Diffusion via ComfyUI"
-
-    @property
-    def input_schema(self) -> dict:
-        return {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string"},
-                "negative_prompt": {"type": "string", "default": ""},
-                "width": {"type": "integer", "default": 1024},
-                "height": {"type": "integer", "default": 1024},
-                "output_path": {"type": "string"},
-                "seed": {"type": "integer", "default": -1},
-            },
-            "required": ["prompt", "output_path"],
-        }
+        return "Text-to-Image via 阿里云通义万相 (DashScope)"
 
     async def execute(self, params: dict, context: dict) -> dict:
-        import httpx
+        from configs.settings import settings
 
         prompt = params["prompt"]
         output_path = params.get("output_path", "")
         negative_prompt = params.get("negative_prompt", "")
-        width = params.get("width", 1024)
-        height = params.get("height", 1024)
+        size = params.get("size", settings.IMAGE_SIZE)  # "1024*1024"
 
-        # Build ComfyUI workflow (simplified SDXL)
-        workflow = self._build_workflow(prompt, negative_prompt, width, height)
-
-        # Submit
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(f"{self.url}/prompt", json={"prompt": workflow})
-            resp.raise_for_status()
-            prompt_id = resp.json().get("prompt_id")
-
-            # Poll
-            image_data = await self._poll_result(prompt_id, client)
-
-        # Save
-        if image_data and output_path:
-            import os
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            import base64
-            with open(output_path, "wb") as f:
-                f.write(base64.b64decode(image_data))
-
-        return {"file_path": output_path, "success": bool(image_data)}
-
-    def _build_workflow(self, prompt, negative, w, h):
-        """Build a minimal ComfyUI SDXL workflow."""
-        return {
-            "3": {
-                "class_type": "KSampler",
-                "inputs": {
-                    "seed": 42, "steps": 25, "cfg": 7,
-                    "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 1,
-                    "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0],
-                    "latent_image": ["5", 0],
-                },
-            },
-            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "revAnimated_v2.safetensors"}},
-            "5": {"class_type": "EmptyLatentImage", "inputs": {"width": w, "height": h, "batch_size": 1}},
-            "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 1]}},
-            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative or "low quality, blurry", "clip": ["4", 1]}},
-            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
-            "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "storyflow", "images": ["8", 0]}},
+        headers = {
+            "Authorization": f"Bearer {settings.IMAGE_API_KEY}",
+            "Content-Type": "application/json",
+            "X-DashScope-Async": "enable",
+        }
+        body = {
+            "model": params.get("model", settings.IMAGE_MODEL),
+            "input": {"prompt": prompt, "negative_prompt": negative_prompt},
+            "parameters": {"size": size, "n": 1},
         }
 
-    async def _poll_result(self, prompt_id: str, client) -> str | None:
-        """Poll ComfyUI for result."""
-        import asyncio
+        async with httpx.AsyncClient(timeout=60) as client:
+            # 1. Submit task
+            resp = await client.post(
+                f"{settings.IMAGE_API_BASE_URL}/services/aigc/text2image/image-synthesis",
+                headers=headers, json=body,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            task_id = data.get("output", {}).get("task_id")
+            if not task_id:
+                return {"success": False, "error": f"No task_id: {data}"}
+
+            # 2. Poll result
+            image_url = await self._poll(task_id, client, settings.IMAGE_API_BASE_URL,
+                                         settings.IMAGE_API_KEY,
+                                         settings.IMAGE_POLL_INTERVAL, settings.IMAGE_POLL_TIMEOUT)
+            if not image_url:
+                return {"success": False, "error": "Image generation timed out"}
+
+            # 3. Download
+            img_resp = await client.get(image_url)
+            img_resp.raise_for_status()
+
+        if output_path:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(img_resp.content)
+
+        return {"file_path": output_path, "image_url": image_url, "success": True}
+
+    @staticmethod
+    async def _poll(task_id: str, client: httpx.AsyncClient,
+                    base_url: str, api_key: str,
+                    interval: int, timeout: int) -> str | None:
+        headers = {"Authorization": f"Bearer {api_key}"}
         elapsed = 0
-        while elapsed < self.poll_timeout:
-            await asyncio.sleep(2)
-            elapsed += 2
+        while elapsed < timeout:
+            await asyncio.sleep(interval)
+            elapsed += interval
             try:
-                resp = await client.get(f"{self.url}/history/{prompt_id}")
-                history = resp.json()
-                if prompt_id in history:
-                    outputs = history[prompt_id].get("outputs", {})
-                    for node_id, node_out in outputs.items():
-                        if "images" in node_out:
-                            img = node_out["images"][0]
-                            subfolder = img.get("subfolder", "")
-                            img_resp = await client.get(f"{self.url}/view", params={
-                                "filename": img["filename"],
-                                "subfolder": subfolder,
-                                "type": "output",
-                            })
-                            import base64
-                            return base64.b64encode(img_resp.content).decode()
+                resp = await client.get(
+                    f"{base_url}/tasks/{task_id}",
+                    headers=headers, timeout=30,
+                )
+                data = resp.json()
+                status = data.get("output", {}).get("task_status", "")
+                if status == "SUCCEEDED":
+                    results = data.get("output", {}).get("results", [])
+                    if results:
+                        return results[0].get("url", "")
+                elif status in ("FAILED", "CANCELLED"):
+                    logger.error("[DashscopeImage] Task %s failed: %s", task_id, data)
+                    return None
             except Exception as e:
-                logger.warning("[GenerateImage] Poll error: %s", e)
+                logger.warning("[DashscopeImage] Poll error: %s", e)
         return None
 
 
-class GenerateVoiceCapability(Capability):
-    """语音合成能力 — 默认使用 CosyVoice."""
-
-    def __init__(self, cosyvoice_url: str | None = None):
-        from configs.settings import settings
-        self.url = cosyvoice_url or settings.COSYVOICE_URL
+class OpenAIImageCapability(Capability):
+    """文生图 — OpenAI DALL·E API (兼容接口)."""
 
     @property
     def description(self) -> str:
-        return "Generate speech from text using CosyVoice TTS"
-
-    @property
-    def input_schema(self) -> dict:
-        return {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string"},
-                "speaker": {"type": "string", "default": "female_1"},
-                "speed": {"type": "number", "default": 1.0},
-                "output_path": {"type": "string"},
-            },
-            "required": ["text", "output_path"],
-        }
+        return "Text-to-Image via OpenAI DALL·E compatible API"
 
     async def execute(self, params: dict, context: dict) -> dict:
-        import httpx
-        import base64
-        import os
+        from configs.settings import settings
 
-        text = params["text"]
+        prompt = params["prompt"]
         output_path = params.get("output_path", "")
-        speaker = params.get("speaker", "female_1")
-        speed = params.get("speed", 1.0)
+        size = params.get("size", "1024x1024")
+
+        # DashScope format "1024*1024" → "1024x1024"
+        size = size.replace("*", "x")
+
+        headers = {
+            "Authorization": f"Bearer {settings.IMAGE_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": params.get("model", settings.IMAGE_MODEL),
+            "prompt": prompt,
+            "n": 1,
+            "size": size,
+            "response_format": "url",
+        }
 
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
-                f"{self.url}/voice/generate",
-                json={"text": text, "speaker": speaker, "speed": speed},
+                f"{settings.IMAGE_API_BASE_URL}/images/generations",
+                headers=headers, json=body,
             )
-
-            if resp.status_code != 200:
-                return {"file_path": "", "success": False, "error": resp.text}
-
+            resp.raise_for_status()
             data = resp.json()
-            audio_content = None
+            image_url = data["data"][0].get("url", "")
 
-            # Support 3 response formats
-            if "audio" in data:  # base64
-                audio_content = base64.b64decode(data["audio"])
-            elif "audio_url" in data:  # URL
-                audio_resp = await client.get(data["audio_url"])
-                audio_content = audio_resp.content
-            else:  # Raw binary
-                audio_content = resp.content
+            if output_path and image_url:
+                img_resp = await client.get(image_url)
+                img_resp.raise_for_status()
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                with open(output_path, "wb") as f:
+                    f.write(img_resp.content)
 
-        if audio_content and output_path:
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            with open(output_path, "wb") as f:
-                f.write(audio_content)
-
-        return {"file_path": output_path, "success": bool(audio_content)}
+        return {"file_path": output_path, "image_url": image_url, "success": True}
 
 
 class MockImageCapability(Capability):
-    """Mock image generation — creates colored placeholders when ComfyUI is unavailable."""
+    """Mock — 生成彩色占位图."""
 
     @property
     def description(self) -> str:
-        return "[Mock] Generate placeholder images (ComfyUI not connected)"
+        return "[Mock] Generate placeholder images"
 
     async def execute(self, params: dict, context: dict) -> dict:
         from PIL import Image, ImageDraw, ImageFont
-        import os, random
 
         prompt = params.get("prompt", "")
         output_path = params.get("output_path", "")
@@ -261,8 +200,9 @@ class MockImageCapability(Capability):
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        colors = [(66,133,244),(234,67,53),(251,188,4),(52,168,83),(171,71,188),(0,172,193)]
-        color = random.choice(colors)
+        colors = [(66, 133, 244), (234, 67, 53), (251, 188, 4),
+                  (52, 168, 83), (171, 71, 188), (0, 172, 193)]
+        color = colors[hash(prompt) % len(colors)]
         img = Image.new("RGB", (1024, 1024), color)
         draw = ImageDraw.Draw(img)
 
@@ -274,23 +214,270 @@ class MockImageCapability(Capability):
             font_s = ImageFont.load_default()
 
         draw.text((512, 420), "(Mock Image)", fill="white", anchor="mm", font=font_l)
-        draw.text((512, 490), "ComfyUI not connected", fill="white", anchor="mm", font=font_s)
+        draw.text((512, 490), "IMAGE_API_PROVIDER=mock", fill="white", anchor="mm", font=font_s)
         preview = (prompt[:80] + "...") if len(prompt) > 80 else prompt
-        draw.text((512, 560), preview, fill=(255,255,255,180), anchor="mm", font=font_s)
+        draw.text((512, 560), preview, fill=(255, 255, 255, 180), anchor="mm", font=font_s)
 
         img.save(output_path, "PNG")
         return {"file_path": output_path, "success": True}
 
 
-class MockVoiceCapability(Capability):
-    """Mock voice generation — creates silent WAV when CosyVoice is unavailable."""
+# ──────────────────────────────────────────────
+# 2. Image-to-Video
+# ──────────────────────────────────────────────
+
+class KlingImageToVideoCapability(Capability):
+    """图生视频 — 可灵 AI (Kling)."""
 
     @property
     def description(self) -> str:
-        return "[Mock] Generate silent WAV (CosyVoice not connected)"
+        return "Image-to-Video via 可灵 AI (Kling)"
 
     async def execute(self, params: dict, context: dict) -> dict:
-        import wave, os
+        from configs.settings import settings
+
+        image_path = params.get("image_path", "")
+        image_url = params.get("image_url", "")
+        output_path = params.get("output_path", "")
+        duration = params.get("duration", settings.VIDEO_DURATION)
+        prompt = params.get("prompt", "")  # optional motion hint
+
+        if not image_path and not image_url:
+            return {"success": False, "error": "No image_path or image_url provided"}
+
+        # If local file, need to upload or use base64
+        if image_path and not image_url:
+            import base64
+            with open(image_path, "rb") as f:
+                image_url = f"data:image/png;base64,{base64.b64encode(f.read()).decode()}"
+
+        headers = {
+            "Authorization": f"Bearer {settings.VIDEO_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": settings.VIDEO_MODEL,
+            "input": {
+                "image_url": image_url,
+                "prompt": prompt or "gentle motion, cinematic",
+            },
+            "parameters": {"duration": duration},
+        }
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            # 1. Submit
+            resp = await client.post(
+                f"{settings.VIDEO_API_BASE_URL}/videos/image2video",
+                headers=headers, json=body,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            task_id = data.get("task_id") or data.get("output", {}).get("task_id")
+            if not task_id:
+                return {"success": False, "error": f"No task_id: {data}"}
+
+            # 2. Poll
+            video_url = await self._poll(task_id, client, settings.VIDEO_API_BASE_URL,
+                                         settings.VIDEO_API_KEY,
+                                         settings.VIDEO_POLL_INTERVAL, settings.VIDEO_POLL_TIMEOUT)
+            if not video_url:
+                return {"success": False, "error": "Video generation timed out"}
+
+            # 3. Download
+            video_resp = await client.get(video_url)
+            video_resp.raise_for_status()
+
+        if output_path:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(video_resp.content)
+
+        return {"file_path": output_path, "video_url": video_url, "success": True}
+
+    @staticmethod
+    async def _poll(task_id: str, client: httpx.AsyncClient,
+                    base_url: str, api_key: str,
+                    interval: int, timeout: int) -> str | None:
+        headers = {"Authorization": f"Bearer {api_key}"}
+        elapsed = 0
+        while elapsed < timeout:
+            await asyncio.sleep(interval)
+            elapsed += interval
+            try:
+                resp = await client.get(
+                    f"{base_url}/videos/image2video/{task_id}",
+                    headers=headers, timeout=30,
+                )
+                data = resp.json()
+                status = data.get("status", "") or data.get("task_status", "")
+                if status in ("succeed", "completed", "SUCCEEDED"):
+                    return data.get("video_url", "") or data.get("output", {}).get("video_url", "")
+                elif status in ("failed", "FAILED"):
+                    logger.error("[KlingVideo] Task %s failed: %s", task_id, data)
+                    return None
+            except Exception as e:
+                logger.warning("[KlingVideo] Poll error: %s", e)
+        return None
+
+
+class MockImageToVideoCapability(Capability):
+    """Mock — 用 FFmpeg 把静态图做成 5 秒视频."""
+
+    @property
+    def description(self) -> str:
+        return "[Mock] Create 5s video from image via FFmpeg"
+
+    async def execute(self, params: dict, context: dict) -> dict:
+        image_path = params.get("image_path", "")
+        output_path = params.get("output_path", "")
+        duration = params.get("duration", "5")
+
+        if not image_path or not output_path:
+            return {"success": False, "error": "Missing image_path or output_path"}
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y",
+            "-loop", "1", "-i", image_path,
+            "-t", str(duration),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-r", "24",
+            str(output_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+
+        success = os.path.isfile(output_path)
+        if not success:
+            logger.error("[MockI2V] ffmpeg failed: %s", stderr.decode()[:300])
+        return {"file_path": output_path, "success": success}
+
+
+# ──────────────────────────────────────────────
+# 3. TTS / Voice
+# ──────────────────────────────────────────────
+
+class DashscopeTTSCapability(Capability):
+    """TTS — 阿里云 DashScope CosyVoice."""
+
+    @property
+    def description(self) -> str:
+        return "TTS via 阿里云 DashScope CosyVoice"
+
+    async def execute(self, params: dict, context: dict) -> dict:
+        from configs.settings import settings
+
+        text = params["text"]
+        output_path = params.get("output_path", "")
+        speaker = params.get("speaker", "female_1")
+        # Map short names to CosyVoice preset voices
+        voice_map = {
+            "female": "longxiaochun", "male": "longlaotie",
+            "female_1": "longxiaochun", "male_1": "longlaotie",
+        }
+        voice = voice_map.get(speaker, speaker)
+
+        headers = {
+            "Authorization": f"Bearer {settings.VOICE_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": settings.VOICE_MODEL,
+            "input": {"text": text},
+            "parameters": {"voice": voice},
+        }
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            # DashScope CosyVoice uses WebSocket or HTTP
+            # HTTP mode: submit async task
+            resp = await client.post(
+                f"{settings.VOICE_API_BASE_URL}/services/aigc/text-generation/generation",
+                headers=headers, json=body,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                audio_url = data.get("output", {}).get("audio_url", "")
+                if audio_url:
+                    audio_resp = await client.get(audio_url, timeout=60)
+                    audio_resp.raise_for_status()
+                    audio_bytes = audio_resp.content
+                elif "audio" in data.get("output", {}):
+                    import base64
+                    audio_bytes = base64.b64decode(data["output"]["audio"])
+                else:
+                    return {"success": False, "error": f"Unexpected TTS response: {data}"}
+            else:
+                return {"success": False, "error": f"TTS API error {resp.status_code}: {resp.text}"}
+
+        if output_path:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(audio_bytes)
+
+        return {"file_path": output_path, "success": True}
+
+
+class CosyVoiceCloudCapability(Capability):
+    """TTS — CosyVoice Cloud API (自部署 CosyVoice HTTP 服务)."""
+
+    @property
+    def description(self) -> str:
+        return "TTS via CosyVoice Cloud API"
+
+    async def execute(self, params: dict, context: dict) -> dict:
+        from configs.settings import settings
+
+        text = params["text"]
+        output_path = params.get("output_path", "")
+        speaker = params.get("speaker", "female_1")
+        speed = params.get("speed", 1.0)
+
+        headers = {"Content-Type": "application/json"}
+        if settings.VOICE_API_KEY:
+            headers["Authorization"] = f"Bearer {settings.VOICE_API_KEY}"
+
+        body = {"text": text, "speaker": speaker, "speed": speed}
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                f"{settings.VOICE_API_BASE_URL}/voice/generate",
+                headers=headers, json=body,
+            )
+
+            if resp.status_code != 200:
+                return {"success": False, "error": resp.text}
+
+            data = resp.json()
+            audio_content = None
+            if "audio" in data:
+                import base64
+                audio_content = base64.b64decode(data["audio"])
+            elif "audio_url" in data:
+                audio_resp = await client.get(data["audio_url"])
+                audio_content = audio_resp.content
+            else:
+                audio_content = resp.content
+
+        if audio_content and output_path:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(audio_content)
+
+        return {"file_path": output_path, "success": bool(audio_content)}
+
+
+class MockVoiceCapability(Capability):
+    """Mock — 生成静默 WAV."""
+
+    @property
+    def description(self) -> str:
+        return "[Mock] Generate silent WAV"
+
+    async def execute(self, params: dict, context: dict) -> dict:
+        import wave
 
         output_path = params.get("output_path", "")
         if not output_path:
@@ -310,125 +497,100 @@ class MockVoiceCapability(Capability):
         return {"file_path": output_path, "success": True}
 
 
+# ──────────────────────────────────────────────
+# 4. Video Merge (FFmpeg — always local)
+# ──────────────────────────────────────────────
+
 class MergeVideoCapability(Capability):
-    """视频合成能力 — 使用 FFmpeg."""
+    """视频拼接 — FFmpeg concat."""
 
     @property
     def description(self) -> str:
-        return "Merge images and audio into video using FFmpeg"
+        return "Concat video clips into final MP4 via FFmpeg"
 
     async def execute(self, params: dict, context: dict) -> dict:
-        import asyncio
-
-        scenes = params.get("scenes", [])  # [{"image": path, "audio": path, "duration": 5.0}]
+        clips = params.get("clips", [])  # [{"video_path": str, "audio_path": str|None}]
         output_path = params.get("output_path", "")
         subtitle_path = params.get("subtitle_path", "")
 
-        if not scenes or not output_path:
-            return {"file_path": "", "success": False, "error": "No scenes or output path"}
+        if not clips or not output_path:
+            return {"file_path": "", "success": False, "error": "No clips or output path"}
 
-        import os
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        # Build concat file
-        concat_list = []
-        for i, scene in enumerate(scenes):
-            img = scene.get("image", "")
-            audio = scene.get("audio", "")
-            duration = scene.get("duration", 5.0)
+        # Step 1: burn subtitles per clip if provided
+        processed_clips = []
+        if subtitle_path and os.path.isfile(subtitle_path):
+            for i, clip in enumerate(clips):
+                src = clip.get("video_path", "")
+                if not os.path.isfile(src):
+                    continue
+                out = os.path.join(os.path.dirname(output_path), f"_sub_{i:03d}.mp4")
+                proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", src,
+                    "-vf", f"ass={subtitle_path}",
+                    "-c:a", "copy", out,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+                if os.path.isfile(out):
+                    processed_clips.append(out)
+                else:
+                    processed_clips.append(src)
+        else:
+            processed_clips = [c["video_path"] for c in clips if os.path.isfile(c.get("video_path", ""))]
 
-            if not os.path.isfile(img):
-                continue
+        if not processed_clips:
+            return {"file_path": "", "success": False, "error": "No valid clips"}
 
-            # Create individual scene video
-            tmp_video = os.path.join(os.path.dirname(output_path), f"_scene_{i:03d}.mp4")
-            cmd = ["ffmpeg", "-y", "-loop", "1", "-i", img, "-t", str(duration)]
-
-            if audio and os.path.isfile(audio):
-                cmd += ["-i", audio, "-c:v", "libx264", "-c:a", "aac", "-shortest"]
-            else:
-                cmd += ["-c:v", "libx264", "-an"]
-
-            if subtitle_path and os.path.isfile(subtitle_path):
-                cmd += ["-vf", f"subtitles={subtitle_path}"]
-
-            cmd += ["-pix_fmt", "yuv420p", tmp_video]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.wait()
-
-            if os.path.isfile(tmp_video):
-                concat_list.append(f"file '{tmp_video}'")
-
-        if not concat_list:
-            return {"file_path": "", "success": False, "error": "No valid scenes"}
-
-        # Concat all
+        # Step 2: concat
         concat_file = os.path.join(os.path.dirname(output_path), "_concat.txt")
         with open(concat_file, "w") as f:
-            f.write("\n".join(concat_list))
+            for p in processed_clips:
+                f.write(f"file '{p}'\n")
 
-        cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
-               "-c", "copy", output_path]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        await asyncio.wait_for(proc.wait(), timeout=300)
-
-        # Cleanup
         try:
-            os.remove(concat_file)
-        except Exception:
-            pass
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", concat_file, "-c", "copy", output_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+            if proc.returncode != 0:
+                logger.error("[MergeVideo] ffmpeg concat failed: %s", stderr.decode()[:300])
+        except asyncio.TimeoutError:
+            return {"file_path": "", "success": False, "error": "Video concat timed out"}
+        finally:
+            try:
+                os.remove(concat_file)
+            except Exception:
+                pass
 
-        success = os.path.isfile(output_path)
-        return {"file_path": output_path, "success": success}
+        # Cleanup temp subtitled files
+        for p in processed_clips:
+            if "_sub_" in os.path.basename(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+        return {"file_path": output_path, "success": os.path.isfile(output_path)}
 
 
 class GenerateStoryboardCapability(Capability):
-    """分镜生成能力 — LLM 生成 + 结构化输出.
-
-    这是一个"组合能力"的例子：依赖 LLM 调用但不直接导入 LLM 库。
-    """
+    """分镜生成 — LLM (组合能力示例)."""
 
     @property
     def description(self) -> str:
         return "Generate storyboard scenes from script using LLM"
 
     async def execute(self, params: dict, context: dict) -> dict:
-        # This capability would use LLM to generate storyboard
-        # The actual LLM call is injected via context["llm_caller"]
         llm_caller = context.get("llm_caller")
         if not llm_caller:
             return {"scenes": [], "success": False, "error": "No LLM caller in context"}
-
-        script = params.get("script", "")
-        characters = params.get("characters", [])
-        world = context.get("story_world")
-
-        # Build prompt using StoryWorld
-        char_descriptions = ""
-        if world:
-            char_descriptions = world.build_image_prompt_context(
-                [c["name"] for c in characters] if isinstance(characters, list) else []
-            )
-
-        prompt = f"""根据以下剧本生成分镜脚本。
-
-## 角色
-{char_descriptions}
-
-## 剧本
-{script}
-
-## 要求
-- 每个场景包含: scene_no, prompt(英文,用于SD生成), dialogue, duration(3-10秒)
-- prompt 必须包含完整的角色外观描述
-- 保持角色一致性"""
-
-        # Call LLM
-        result = await llm_caller(prompt, temperature=0.4, max_tokens=4096)
+        result = await llm_caller(params.get("script", ""), temperature=0.4, max_tokens=4096)
         return {"scenes": result, "success": True}
 
 
@@ -436,58 +598,34 @@ class GenerateStoryboardCapability(Capability):
 # Capability Registry
 # ──────────────────────────────────────────────
 
-# Standard capability names
 CAP_GENERATE_IMAGE = "generate_image"
+CAP_IMAGE_TO_VIDEO = "image_to_video"
 CAP_GENERATE_VOICE = "generate_voice"
 CAP_MERGE_VIDEO = "merge_video"
 CAP_GENERATE_STORYBOARD = "generate_storyboard"
-CAP_UPSCALE = "upscale"
-CAP_INPAINT = "inpaint"
-CAP_FACE_REPAIR = "face_repair"
 
 
 class CapabilityRegistry:
-    """能力注册表.
-
-    Agent 声明需要什么能力，Registry 提供实现。
-    """
+    """能力注册表."""
 
     def __init__(self):
         self._capabilities: dict[str, Capability] = {}
-        self._aliases: dict[str, str] = {}  # alias → canonical name
 
-    def register(self, name: str, capability: Capability, aliases: list[str] | None = None):
-        """注册能力."""
+    def register(self, name: str, capability: Capability):
         self._capabilities[name] = capability
-        if aliases:
-            for alias in aliases:
-                self._aliases[alias] = name
         logger.info("[CapabilityRegistry] Registered '%s': %s", name, capability.name)
 
     def get(self, name: str) -> Capability | None:
-        """获取能力实现."""
-        canonical = self._aliases.get(name, name)
-        return self._capabilities.get(canonical)
+        return self._capabilities.get(name)
 
     def has(self, name: str) -> bool:
-        return name in self._capabilities or name in self._aliases
+        return name in self._capabilities
 
     async def use(self, name: str, params: dict, context: dict | None = None) -> dict:
-        """使用能力 — Agent 的统一调用入口.
-
-        Args:
-            name: 能力名称
-            params: 输入参数
-            context: 上下文（StoryWorld, Workspace 等）
-
-        Returns:
-            执行结果
-        """
         cap = self.get(name)
         if not cap:
             logger.error("[CapabilityRegistry] Unknown capability: %s", name)
             return {"success": False, "error": f"Unknown capability: {name}"}
-
         context = context or {}
         start = time.time()
         try:
@@ -500,62 +638,80 @@ class CapabilityRegistry:
             return {"success": False, "error": str(e), "_duration": time.time() - start}
 
     def list_all(self) -> list[dict]:
-        """列出所有已注册能力."""
         return [
             {"name": name, "class": cap.name, "description": cap.description}
             for name, cap in self._capabilities.items()
         ]
 
-    def setup_defaults(self, mock_unavailable: bool = True):
-        """注册默认能力集.
+    def setup_defaults(self):
+        """根据 settings 中的 provider 配置注册能力.
 
-        Args:
-            mock_unavailable: 如果为 True，检测真实服务可用性，不可达时自动降级为 Mock.
+        任何 provider="mock" 或 API_KEY 为空且非 mock-only provider → 自动降级为 Mock.
         """
-        import httpx
+        from configs.settings import settings
 
-        # --- generate_image ---
-        try:
-            httpx.get(f"{self._get_comfyui_url()}/system_stats", timeout=3).raise_for_status()
-            self.register(CAP_GENERATE_IMAGE, GenerateImageCapability())
-            logger.info("[CapabilityRegistry] generate_image → ComfyUI (real)")
-        except Exception:
-            if mock_unavailable:
-                self.register(CAP_GENERATE_IMAGE, MockImageCapability())
-                logger.warning("[CapabilityRegistry] generate_image → Mock (ComfyUI not reachable)")
-            else:
-                self.register(CAP_GENERATE_IMAGE, GenerateImageCapability())
-                logger.info("[CapabilityRegistry] generate_image → ComfyUI (registered, will fail at runtime)")
+        # ── generate_image ──
+        self._setup_capability(
+            CAP_GENERATE_IMAGE,
+            provider=settings.IMAGE_API_PROVIDER,
+            key=settings.IMAGE_API_KEY,
+            providers={
+                "dashscope": DashscopeImageCapability,
+                "openai": OpenAIImageCapability,
+                "mock": MockImageCapability,
+            },
+            mock_class=MockImageCapability,
+        )
 
-        # --- generate_voice ---
-        try:
-            httpx.get(f"{self._get_cosyvoice_url()}/health", timeout=3).raise_for_status()
-            self.register(CAP_GENERATE_VOICE, GenerateVoiceCapability())
-            logger.info("[CapabilityRegistry] generate_voice → CosyVoice (real)")
-        except Exception:
-            if mock_unavailable:
-                self.register(CAP_GENERATE_VOICE, MockVoiceCapability())
-                logger.warning("[CapabilityRegistry] generate_voice → Mock (CosyVoice not reachable)")
-            else:
-                self.register(CAP_GENERATE_VOICE, GenerateVoiceCapability())
-                logger.info("[CapabilityRegistry] generate_voice → CosyVoice (registered, will fail at runtime)")
+        # ── image_to_video ──
+        self._setup_capability(
+            CAP_IMAGE_TO_VIDEO,
+            provider=settings.VIDEO_API_PROVIDER,
+            key=settings.VIDEO_API_KEY,
+            providers={
+                "kling": KlingImageToVideoCapability,
+                "mock": MockImageToVideoCapability,
+            },
+            mock_class=MockImageToVideoCapability,
+        )
 
+        # ── generate_voice ──
+        self._setup_capability(
+            CAP_GENERATE_VOICE,
+            provider=settings.VOICE_API_PROVIDER,
+            key=settings.VOICE_API_KEY,
+            providers={
+                "dashscope_tts": DashscopeTTSCapability,
+                "cosyvoice_cloud": CosyVoiceCloudCapability,
+                "mock": MockVoiceCapability,
+            },
+            mock_class=MockVoiceCapability,
+        )
+
+        # ── merge_video (always FFmpeg, no API) ──
         self.register(CAP_MERGE_VIDEO, MergeVideoCapability())
+
+        # ── generate_storyboard (LLM-based) ──
         self.register(CAP_GENERATE_STORYBOARD, GenerateStoryboardCapability())
-        logger.info("[CapabilityRegistry] Default capabilities registered")
 
-    @staticmethod
-    def _get_comfyui_url() -> str:
-        try:
-            from configs.settings import settings
-            return settings.COMFYUI_URL
-        except Exception:
-            return "http://localhost:8188"
+        logger.info("[CapabilityRegistry] All default capabilities registered")
 
-    @staticmethod
-    def _get_cosyvoice_url() -> str:
-        try:
-            from configs.settings import settings
-            return settings.COSYVOICE_URL
-        except Exception:
-            return "http://localhost:50000"
+    def _setup_capability(self, name: str, provider: str, key: str,
+                          providers: dict, mock_class: type):
+        """根据 provider 选择实现，无 key 时自动降级 Mock."""
+        if provider == "mock":
+            self.register(name, mock_class())
+            logger.info("[CapabilityRegistry] %s → Mock (explicit)", name)
+            return
+
+        cap_class = providers.get(provider)
+        if cap_class:
+            if key:
+                self.register(name, cap_class())
+                logger.info("[CapabilityRegistry] %s → %s (real)", name, provider)
+            else:
+                self.register(name, mock_class())
+                logger.warning("[CapabilityRegistry] %s → Mock (no API key for %s)", name, provider)
+        else:
+            self.register(name, mock_class())
+            logger.warning("[CapabilityRegistry] %s → Mock (unknown provider '%s' for %s)", provider, name)

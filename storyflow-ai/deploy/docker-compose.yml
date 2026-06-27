@@ -11,7 +11,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U storyflow"]
       interval: 5s
@@ -30,14 +29,6 @@ services:
       timeout: 5s
       retries: 5
 
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-
   backend:
     build:
       context: ../backend
@@ -45,9 +36,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://storyflow:storyflow@postgres:5432/storyflow
+      DATABASE_URL: postgresql+asyncpg://storyflow:postgres:5432/storyflow
       REDIS_URL: redis://redis:6379/0
-      QDRANT_URL: http://qdrant:6333
       LLM_API_KEY: ${LLM_API_KEY}
       COMFYUI_URL: http://host.docker.internal:8188
       COSYVOICE_URL: http://host.docker.internal:50000
@@ -59,21 +49,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      qdrant:
-        condition: service_started
-
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
-      - storage_data:/usr/share/nginx/html/storage:ro
-    depends_on:
-      - backend
 
 volumes:
   postgres_data:
   redis_data:
-  qdrant_data:
   storage_data:

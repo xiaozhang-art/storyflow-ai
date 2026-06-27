@@ -1,286 +1,194 @@
 <div align="center">
 
-# 🎬 StoryFlow AI
+# StoryFlow AI
 
-**基于 Multi-Agent Workflow 的 AI 漫剧自动生成平台**
+**AI 漫剧自动生成平台**
 
-用户输入一段创意，系统通过 6 个 AI Agent 串联协作，自动完成
-**剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 配音合成 → 视频导出**，
-最终输出可播放的 MP4 漫剧视频。
+用户输入一段创意，系统通过 6 个 Agent 串联协作，自动完成
+**剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 配音合成 → 视频导出**。
 
-[系统架构](#系统架构) · [快速开始](#快速开始) · [API 文档](#api-接口) · [配置说明](#配置项)
+[核心设计](#核心设计) · [快速开始](#快速开始) · [API](#api) · [配置](#配置)
 
 </div>
 
 ---
 
-## 系统架构
+## 核心设计
+
+StoryFlow AI 围绕 AI 漫剧的三个核心痛点设计：
+
+### ① 长篇一致性 — StoryWorld
+
+不是 Chat History，不是 Memory，而是结构化的 **Story Bible**。
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     React Frontend                          │
-│              (Vite + TypeScript + Ant Design 5)              │
-│                                                             │
-│  HomePage ──→ StoryPage (WebSocket 进度) ──→ ResultPage     │
-└─────────────────────────┬───────────────────────────────────┘
-                          │  REST API / WebSocket
-┌─────────────────────────▼───────────────────────────────────┐
-│                   FastAPI Gateway                           │
-│              (CORS · 路由 · 静态文件 · WebSocket)            │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-          ┌───────────────┴───────────────┐
-          ▼                               ▼
-┌─────────────────────┐       ┌──────────────────────┐
-│  LangGraph Pipeline  │       │  Agent OS Runtime    │
-│     (v1.0 默认)      │       │    (v2.0 可选)       │
-│                      │       │                      │
-│  Script Agent        │       │  Hook · Memory       │
-│    ↓                 │       │  Skill · Session     │
-│  Character Agent     │       │  A2A · Scheduler     │
-│    ↓                 │       │  Langfuse 可观测性   │
-│  Storyboard Agent    │       └──────────────────────┘
-│    ↓                 │
-│  Image Agent         │       ┌──────────────────────┐
-│    ↓                 │       │  LangGraph           │
-│  Voice Agent         │       │  Checkpointing       │
-│    ↓                 │       │  (SQLite 崩溃恢复)    │
-│  Video Agent         │       └──────────────────────┘
-└─────────┬───────────┘
-          │
-┌─────────▼───────────────────────────────────────────────────┐
-│                      Tool Layer                             │
-│  ┌──────────┐  ┌───────────┐  ┌───────────┐  ┌──────────┐ │
-│  │ ChatOpenAI│  │  ComfyUI  │  │ CosyVoice │  │  FFmpeg  │ │
-│  │ (LLM)    │  │ (SDXL)    │  │  (TTS)    │  │ (Video)  │ │
-│  └──────────┘  └───────────┘  └───────────┘  └──────────┘ │
-│  ┌──────────┐  ┌───────────┐                               │
-│  │  Qdrant  │  │  Redis    │  (PubSub 推送 + 任务状态)     │
-│  │ (Memory) │  │           │                               │
-│  └──────────┘  └───────────┘                               │
-└─────────────────────────────────────────────────────────────┘
+StoryWorld
+├── Story Bible        （故事圣经：标题/类型/风格/集数）
+├── Character Library  （角色库：四维外观/性格/口头禅/当前状态）
+├── Location Library   （地点库：视觉风格/氛围描述）
+├── Timeline           （时间线：Git 式状态变更记录）
+├── Relationship Graph （关系图：角色间关系）
+└── Lore               （世界观设定）
 ```
 
-### 双后端引擎
+所有 Agent 只读 StoryWorld，不自己总结。Image Agent 根据 Character Library 生成 Prompt，而非"根据上一张图"。角色状态变更像 Git commit 一样记录，女主受伤后后续所有 Image 自然知道。
 
-| | LangGraph Pipeline (v1.0) | Agent OS Runtime (v2.0) |
-|--|--|--|
-| **触发方式** | 默认 | `USE_RUNTIME=true` |
-| **编排** | `StateGraph` + `StoryState` | `RuntimeWorkflowRunner` + `ConversationManager` |
-| **可观测性** | 日志 + DB 持久化 | Hook 事件链 (Logger → QualityGate → Langfuse) |
-| **质量门禁** | 无 | QualityGate Hook (6 Agent 专用校验器，不合格自动重试) |
-| **人物一致性** | 无 | CharacterMemoryService (Memory 存储角色外观，分镜/出图时注入) |
-| **记忆** | 无 | 4 层 Memory (working / session / conversation / long-term) |
-| **通信** | 状态字典传递 | MCP Envelope + A2A Message Bus (memory / Redis Stream) |
-| **技能** | 硬编码 | Skill Engine (6 个 YAML Skill 定义 + 约束校验) |
-| **会话** | 无 | Session Manager (状态管理 + 超时) |
-| **追踪** | 无 | Langfuse Handler (配置即启用) |
-| **调度** | LangGraph executor | Execution Scheduler (LLM / Tool / GPU 线程池) |
-| **增量持久化** | astream_events 逐步 | persist_callback 每步 DB 写入 |
+**用户 Patch 机制**：用户说"女主太胖"，系统生成 Patch 修改 `appearance.cloth`，StoryWorld 更新后后续生成自动采用，不需要重跑全部。
 
-默认使用 LangGraph 管线，可通过环境变量 `USE_RUNTIME=true` 切换到 Agent OS Runtime。Runtime v2.0 通过适配器包装现有 Agent，无需重写代码即可获得三大增强能力：
+### ② 质量可控 — QualityEngine
 
-- **Hook 质量门禁** — 每个 Agent 完成后自动运行专用校验器（script 检查结构完整性、character 检查四维度外观、storyboard 检查场景数量和角色引用、image/voice/video 检查产出物），校验失败自动重试最多 2 次
-- **Memory 人物一致性** — character_agent 产出后自动将角色外观存入 Memory，storyboard_agent 生成分镜时自动注入一致性约束段落（"角色外观一致性约束（必须严格遵守）"），image_agent 可验证 prompt 是否包含完整角色特征
-- **Skill 驱动** — 6 个 Agent 各有 YAML Skill 定义（含 I/O Schema、约束规则、custom_rules），Runtime 启动时自动从 `skills/` 目录加载
+不是 Reviewer Agent（一个 Prompt 判断质量），而是**结构化的多 Checker 审核引擎**。
 
-Runtime 初始化失败时自动 fallback 回 LangGraph。
+每个产出物经过多个独立 Checker，每个返回 PASS / FAIL / RETRY / ASK_USER：
 
-### 核心设计
+| Checker | 检查内容 |
+|---------|---------|
+| CharacterConsistencyChecker | 角色四维外观是否在 Prompt 中完整 |
+| SceneContinuityChecker | 场景是否尊重 Timeline 最近状态变更 |
+| ScriptStructureChecker | 剧本结构完整性（集数/角色数/摘要长度） |
+| DialogueChecker | 台词与角色人设是否匹配 |
+| StyleChecker | 产出物是否符合 Story Bible 定义的视觉风格 |
+| SafetyChecker | 内容安全过滤 |
+| FileExistenceChecker | 产出物文件是否真实生成 |
 
-- **实时进度推送** — Redis PubSub + WebSocket，前端 6 步进度条实时更新
-- **数据库持久化** — 每个 Agent 完成后立即写入 PostgreSQL（5 个 `_persist_*` 函数），两个引擎均支持增量持久化
-- **崩溃恢复** — LangGraph `AsyncSqliteSaver` Checkpoint，进程重启后从断点续跑
-- **容错与降级** — 图片/配音/视频 Agent 按场景粒度 try/catch，部分失败不中断整体流程
-- **自动重试** — Script/Character/Storyboard Agent 使用 tenacity 3 次指数退避重试；Image Agent 每张图最多 2 次重试；Runtime 模式额外提供 Quality Gate 质量门禁重试（最多 2 次）
-- **LLM 工厂模式** — `get_creative_llm()` (temp=0.8) / `get_precise_llm()` (temp=0.4) 按场景选用，实例缓存复用
-- **结构化输出** — Script/Character Agent 用 `PydanticOutputParser`；Storyboard Agent 双策略（Pydantic 优先 + JSON fallback）
-- **Prompt 外部化** — 所有 Agent Prompt 集中在 `prompts/` 模块，与 Agent 逻辑解耦
-- **Runtime 三大能力** — Hook（质量门禁）、Memory（人物一致性）、Skill（约束驱动）三大系统已完整接通管线
+**Human Review Checkpoint**：关键节点（剧本/角色）自动暂停，等用户确认后继续。
+
+### ③ 长任务可恢复 — Project + Checkpoint
+
+不是 Session，而是 **Project**。
+
+```
+Project
+├── StoryWorld     （知识资产，随项目持久化）
+├── Workspace      （所有生成物，按项目组织）
+├── Checkpoint     （每步自动存档，像游戏存档）
+└── Status         （created → running → paused → completed）
+```
+
+今天生成 1-3 集，明天从第 4 集继续。关闭网页再回来，Checkpoint 自动恢复。
+
+## 架构
+
+```
+Agent → Capability → Workspace → Quality → Hook → Event → Next Agent
+```
+
+```
+ProjectRuntime
+│
+├── StoryWorld          长期知识（Story Bible）
+├── Workspace           文件管理（图片/音频/视频/字幕）
+├── CheckpointStore     存档/恢复
+├── QualityEngine       质量审核（7 个 Checker）
+├── CapabilityRegistry  能力驱动（Agent 不硬编码 ComfyUI/CosyVoice）
+├── HookManager         生命周期扩展（16 种事件）
+└── EventBus            轻量事件总线
+```
+
+**Agent 只做 Planner，能力由 Capability 提供。** 以后换 SD → FLUX，只改 Capability 实现，不动 Agent。
+
+**所有横切逻辑走 Hook，不污染 Agent。** Langfuse Tracing / Token 统计 / 自动重试 / 进度推送都通过 Hook 挂接。
 
 ## 技术栈
 
-| 层级 | 技术 | 说明 |
-|------|------|------|
-| **前端** | React 18, TypeScript, Vite 5, Ant Design 5, Axios | SPA，3 页面 |
-| **后端** | Python 3.11+, FastAPI, SQLAlchemy 2.0 (async), Pydantic 2.0 | 异步全栈 |
-| **Agent 框架** | LangGraph, LangChain, ChatOpenAI | 6-Agent 串行管线 |
-| **Runtime (v2)** | Agent OS Runtime | Hook / Memory / Skill / Session / A2A / Langfuse |
-| **数据库** | PostgreSQL 16 (asyncpg) | 故事 / 角色 / 场景 / 任务 |
-| **缓存** | Redis 7 | 任务状态 + PubSub + A2A 传输 |
-| **向量数据库** | Qdrant | 角色 / 剧情记忆检索 |
-| **图像生成** | Stable Diffusion XL via ComfyUI API | 1024x1024, KSampler DPM++ 2M Karras |
-| **语音合成** | CosyVoice TTS | 男/女声自动映射 |
-| **视频合成** | FFmpeg | 图片+音频→视频→字幕烧录→拼接 |
-| **部署** | Docker Compose, Nginx | 一键部署 |
+| 层级 | 技术 |
+|------|------|
+| 前端 | React 18, TypeScript, Vite 5, Ant Design 5 |
+| 后端 | Python 3.11+, FastAPI, SQLAlchemy 2.0 (async), Pydantic 2.0 |
+| Agent | LangChain ChatOpenAI, 6-Agent 串行管线 |
+| Runtime | Project Runtime（StoryWorld + Quality + Checkpoint + Capability + Hook） |
+| 数据库 | PostgreSQL 16, Redis 7 |
+| 图像 | Stable Diffusion XL via ComfyUI |
+| 语音 | CosyVoice TTS |
+| 视频 | FFmpeg |
 
 ## 项目结构
 
 ```
 storyflow-ai/
 ├── backend/
-│   ├── main.py                        # FastAPI 入口 (Runtime 初始化 + CORS + 路由)
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   │
-│   ├── configs/
-│   │   └── settings.py                # Pydantic Settings (含 Runtime 参数)
-│   │
-│   ├── prompts/                       # ⭐ 集中管理的 Prompt 模板
-│   │   └── __init__.py                # Script / Character / Storyboard prompts
-│   │
-│   ├── models/                        # SQLAlchemy ORM
-│   │   ├── base.py
-│   │   ├── story.py
-│   │   ├── character.py
-│   │   ├── episode.py
-│   │   ├── scene.py                   # (prompt/camera/duration/dialogue/image/audio)
-│   │   └── task.py
-│   │
-│   ├── schemas/
-│   │   ├── story.py
-│   │   ├── agent.py
-│   │   └── task.py
-│   │
-│   ├── api/
-│   │   ├── story.py
-│   │   └── task.py
-│   │
-│   ├── services/
-│   │   └── story_service.py
-│   │
-│   ├── repositories/
-│   │   ├── story_repo.py
-│   │   └── task_repo.py
-│   │
-│   ├── agents/                        # ⭐ 6 个 LangGraph Agent
-│   │   ├── script_agent.py            # 剧本 (tenacity 3x, PydanticOutputParser)
-│   │   ├── character_agent.py         # 角色视觉卡片 (AppearanceCard 强类型)
-│   │   ├── storyboard_agent.py        # 分镜 (双策略: Pydantic + JSON fallback)
-│   │   ├── image_agent.py             # ComfyUI (随机 seed, 逐场景重试, 部分容错)
-│   │   ├── voice_agent.py             # CosyVoice (性别→音色, 部分容错)
-│   │   └── video_agent.py             # FFmpeg (实际时长对齐字幕, 烧录, 拼接)
-│   │
-│   ├── workflows/
-│   │   ├── state.py                   # StoryState TypedDict
-│   │   ├── story_workflow.py          # LangGraph 编排 + Checkpoint
-│   │   └── runtime_workflow.py        # Agent OS Runtime 适配层
-│   │
-│   ├── tools/
-│   │   ├── comfyui_client.py
-│   │   ├── cosyvoice_client.py
-│   │   └── ffmpeg_tool.py
-│   │
-│   ├── tasks/
-│   │   └── runner.py                  # 双后端任务运行器 (5 个 _persist_* 函数)
-│   │
-│   ├── app/
-│   │   ├── database.py
-│   │   ├── redis.py
-│   │   └── llm.py                     # LLM 工厂 (creative / precise)
-│   │
-│   ├── memory/
-│   │   └── vector_store.py            # Qdrant 向量记忆
-│   │
-│   ├── utils/
-│   │   └── json_helper.py
-│   │
-│   ├── skills/                        # ⭐ Skill 定义 (YAML)
-│   │   ├── script_writer/skill.yaml   #   编剧 Skill (max 6 episodes)
-│   │   ├── character_designer/        #   角色设计 Skill (4维度必须)
-│   │   ├── storyboard_designer/       #   分镜 Skill (角色一致性约束)
-│   │   ├── image_generator/           #   出图 Skill (DPM++ 2M Karras)
-│   │   ├── voice_generator/           #   配音 Skill (性别→音色)
-│   │   └── video_composer/            #   合成 Skill (ASS字幕+拼接)
-│   │
-│   └── runtime/                       # ⭐ Agent OS Runtime (v2.0)
-│       ├── app.py                     # RuntimeApp (Hook+Skill+Memory 组装)
-│       ├── adapter.py                 # 适配器 (Memory注入+质量重试+Skill约束)
-│       ├── agent_runtime/             # Agent 运行时上下文
-│       ├── execution/                 # 调度器 (LLM/Tool/GPU 线程池)
-│       ├── conversation/              # 对话管理 (线性管线编排)
-│       ├── skill_engine/              # 技能注册/选择/校验/执行
-│       ├── memory/                    # 4 层记忆 + CharacterMemoryService
-│       ├── session/                   # 会话管理 (超时/恢复)
-│       ├── hook/                      # 事件钩子 (14 种生命周期事件)
-│       ├── handlers/                  # Logger / QualityGate / Langfuse
-│       ├── mcp/                       # MCP 协议 (Envelope/Router/Validator)
-│       └── message_bus/               # A2A 通信 (InMemory/Redis Stream)
-│
-├── frontend/
-│   ├── package.json
-│   ├── vite.config.ts
+│   ├── main.py                     # FastAPI 入口
+│   ├── .env                        # 环境变量
+│   ├── configs/settings.py         # 配置
+│   ├── models/                     # SQLAlchemy ORM (Story/Episode/Character/Scene/Task)
+│   ├── api/                        # API 路由
+│   ├── agents/                     # 6 个 Agent
+│   │   ├── script_agent.py
+│   │   ├── character_agent.py
+│   │   ├── storyboard_agent.py
+│   │   ├── image_agent.py
+│   │   ├── voice_agent.py
+│   │   └── video_agent.py
+│   ├── tasks/runner.py             # 任务运行器
+│   ├── app/                        # database / redis / llm
+│   ├── schemas/                    # Pydantic schemas
+│   ├── services/                   # 业务逻辑
+│   ├── repositories/               # 数据访问
+│   ├── prompts/                    # Prompt 模板
+│   └── runtime/v3/                 # Project Runtime
+│       ├── project.py              # Project + ProjectRuntime
+│       ├── world/                  # StoryWorld (Story Bible)
+│       ├── quality/                # QualityEngine + 7 Checkers
+│       ├── capability/             # Capability Registry
+│       ├── hook/                   # HookManager (16 事件)
+│       ├── checkpoint/             # Checkpoint Store
+│       ├── event_bus.py            # EventBus
+│       └── workspace.py            # 文件工作区
+├── frontend/                       # React + Ant Design
 │   └── src/
-│       ├── App.tsx
-│       ├── api/index.ts               # API + WebSocket (完整类型约束)
-│       ├── types/index.ts             # TypeScript 类型 (与后端对齐)
-│       └── pages/
-│           ├── HomePage.tsx           # 创意输入 + 历史列表
-│           ├── StoryPage.tsx          # 6 步进度 + WebSocket
-│           └── ResultPage.tsx         # 视频 + 剧本 + 分镜 + 角色
-│
-├── deploy/
-│   ├── docker-compose.yml
-│   ├── nginx/default.conf
-│   ├── init.sql
-│   └── .env.example
-│
-└── scripts/
-    └── init_db.py
+│       ├── pages/                  # HomePage / StoryPage / ResultPage
+│       └── api/                    # API + WebSocket
+└── deploy/
+    └── docker-compose.yml
 ```
 
 ## 快速开始
 
-### 环境要求
+### 前提
 
-- Python 3.11+
-- Node.js 18+
-- Docker & Docker Compose
-- FFmpeg
-- **外部依赖**（自行部署或使用远程服务）：
-  - OpenAI 兼容 LLM API（GPT-4o / Qwen / DeepSeek 等）
-  - [ComfyUI](https://github.com/comfyanonymous/ComfyUI) (SDXL)
-  - [CosyVoice](https://github.com/FunAudioLLM/CosyVoice) (TTS)
+- Python 3.11+, Node.js 18+, FFmpeg, Docker
+- **必填**：LLM API Key（OpenAI / DeepSeek / 智谱 / Moonshot 等）
+- **必填**：[ComfyUI](https://github.com/comfyanonymous/ComfyUI)（SDXL 图像生成）
+- **必填**：[CosyVoice](https://github.com/FunAudioLLM/CosyVoice)（TTS 语音合成）
 
-### 方式一：本地开发
+### 1. 基础服务
 
 ```bash
-git clone https://github.com/xiaozhang-art/storyflow-ai.git
-cd storyflow-ai
+# PostgreSQL + Redis
+docker run -d --name sf-pg -p 5432:5432 \
+  -e POSTGRES_USER=storyflow -e POSTGRES_PASSWORD=storyflow -e POSTGRES_DB=storyflow \
+  postgres:16-alpine
 
-# 配置
-cp deploy/.env.example backend/.env
-# 编辑 backend/.env，填入 LLM_API_KEY 等
+docker run -d --name sf-redis -p 6379:6379 redis:7-alpine
+```
 
-# 基础服务
-cd deploy && docker compose up -d postgres redis qdrant && cd ..
+### 2. 后端
 
-# 后端
+```bash
 cd backend
-python -m venv venv && source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-# 前端 (新终端)
+# 配置 .env（必填 LLM_API_KEY）
+# 用 DeepSeek 测试最便宜：
+#   LLM_API_KEY=sk-xxx  LLM_MODEL=deepseek-chat  LLM_BASE_URL=https://api.deepseek.com/v1
+
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 3. 前端
+
+```bash
 cd frontend && npm install && npm run dev
 ```
 
 | 地址 | 说明 |
 |------|------|
-| http://localhost:5173 | 前端 |
-| http://localhost:8000/docs | Swagger API |
+| http://localhost:3000 | 前端 |
+| http://localhost:8000/docs | API 文档 |
 | http://localhost:8000/health | 健康检查 |
 
-### 方式二：Docker Compose
-
-```bash
-cd storyflow-ai/deploy
-# 编辑 .env，填入 LLM_API_KEY
-docker compose up -d
-# 访问 http://localhost
-```
-
-## API 接口
+## API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -289,108 +197,45 @@ docker compose up -d
 | `GET` | `/api/story/{id}` | 故事详情 |
 | `POST` | `/api/story/{id}/generate` | 启动生成 |
 | `GET` | `/api/story/{id}/result` | 生成结果 |
+| `GET` | `/api/story/{id}/world` | 查看 StoryWorld |
+| `POST` | `/api/story/{id}/patch` | 应用 Patch（改角色外观等） |
+| `GET` | `/api/story/{id}/checkpoints` | 查看存档列表 |
+| `POST` | `/api/story/{id}/resume` | 从存档恢复生成 |
 | `GET` | `/api/task/{id}` | 任务状态 |
-| `WS` | `/api/task/{id}/ws` | WebSocket 进度 |
-| `GET` | `/api/runtime/stats` | Runtime 统计 |
-| `GET` | `/health` | 健康检查 |
+| `WS` | `/api/task/{id}/ws` | WebSocket 实时进度 |
+
+### Patch 示例
 
 ```bash
-# 创建并生成
-curl -X POST http://localhost:8000/api/story \
-  -H "Content-Type: application/json" \
-  -d '{"title":"逆袭校花","prompt":"胖子甄大卫逆袭校花莲花的故事","genre":"校园"}'
-curl -X POST http://localhost:8000/api/story/{story_id}/generate
-curl http://localhost:8000/api/task/{task_id}
+# 修改角色服装 — 以后所有图片自动使用新外观
+curl -X POST /api/story/{id}/patch -H "Content-Type: application/json" -d '{
+  "character_name": "林晓",
+  "field_path": "appearance.cloth",
+  "new_value": "black armor with silver trim"
+}'
+
+# 查看存档
+curl /api/story/{id}/checkpoints
+
+# 从存档恢复
+curl -X POST /api/story/{id}/resume
 ```
 
-## Agent 工作流
-
-```
-用户创意 (prompt + genre)
-        │
-        ▼
-┌──────────────────┐
-│  Script Agent    │  LLM → 剧情大纲 + 角色设定 + 分集剧本
-│  temp=0.8        │  PydanticOutputParser → ScriptOutput
-│  tenacity 3x     │
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ Character Agent  │  丰富角色视觉描述
-│  temp=0.4        │  → AppearanceCard (hair/body/cloth/face)
-│  tenacity 3x     │  失败 fallback 原始角色
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ Storyboard Agent │  剧本 → 分镜 (逐集)
-│  temp=0.4        │  策略1: PydanticOutputParser
-│  tenacity 3x/集  │  策略2: JSON 解析 fallback
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Image Agent     │  ComfyUI 逐镜生成
-│  随机 seed/镜    │  SDXL 1024x1024
-│  2x 重试/镜      │  部分失败 → image_partial
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Voice Agent     │  CosyVoice 逐镜配音
-│  性别→音色映射   │  base64/URL 双格式
-│  部分容错        │
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Video Agent     │  FFmpeg 合成
-│                  │  1. 图片+音频 → 逐场景视频 (记录实际时长)
-│                  │  2. ASS 字幕 (基于实际视频时长)
-│                  │  3. 字幕烧录 → concat 拼接 → story.mp4
-└──────────────────┘
-```
-
-## 数据库设计
-
-```
-story          ─── 故事 (title, prompt, genre, status)
-  ├─ character ─── 角色 (name, gender, age, appearance JSONB, personality JSONB)
-  ├─ episode   ─── 剧集 (episode_no, title, summary, script)
-  └─ scene     ─── 场景 (scene_no, prompt, camera, duration, dialogue, image_url, audio_url)
-task           ─── 任务 (status, progress, current_step, error_message)
-```
-
-## 配置项
+## 配置
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `LLM_API_KEY` | — | LLM API Key (**必填**) |
-| `LLM_MODEL` | `gpt-4o` | 模型名称 |
-| `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API 地址 |
-| `LLM_TEMPERATURE` | `0.7` | 默认温度 |
+| `LLM_API_KEY` | — | **必填** |
+| `LLM_MODEL` | `gpt-4o` | 模型名 |
+| `LLM_BASE_URL` | `https://api.openai.com/v1` | API 地址 |
+| `DATABASE_URL` | `postgresql+asyncpg://storyflow:storyflow@localhost:5432/storyflow` | 数据库 |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis |
 | `COMFYUI_URL` | `http://localhost:8188` | ComfyUI |
 | `COSYVOICE_URL` | `http://localhost:50000` | CosyVoice |
-| `DATABASE_URL` | `postgresql+asyncpg://...` | PostgreSQL |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis |
-| `QDRANT_URL` | `http://localhost:6333` | Qdrant |
 | `STORAGE_PATH` | `./storage` | 文件存储 |
-| `USE_RUNTIME` | `false` | 设为 `true` 启用 Agent OS Runtime |
-| `COMFYUI_POLL_TIMEOUT` | `300` | 单张图最大等待秒数 |
-| `COMFYUI_MAX_RETRIES` | `2` | 单张图重试次数 |
 | `MAX_EPISODES` | `6` | 最大集数 |
-| `SCENES_PER_EPISODE` | `(5, 10)` | 每集场景数范围 |
-
-### Runtime v2.0 额外配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `USE_RUNTIME` | `false` | 设为 `true` 启用 Agent OS Runtime v2.0 |
-| `LANGFUSE_PUBLIC_KEY` | — | Langfuse 公钥（启用可观测性） |
-| `LANGFUSE_SECRET_KEY` | — | Langfuse 密钥 |
-| `A2A_TRANSPORT` | `memory` | Agent 通信 (`memory` / `redis`) |
-| `LLM_WORKER_CONCURRENCY` | `10` | LLM 并发数 |
-| `GPU_WORKER_CONCURRENCY` | `2` | GPU 并发数 |
-| `SESSION_IDLE_TIMEOUT` | `86400` | 会话超时 (秒) |
-| `MEMORY_WORKING_TTL` | `300` | 工作记忆 TTL (秒) |
-| `MEMORY_SESSION_TTL` | `86400` | 会话记忆 TTL (秒) |
-| `MEMORY_CONFIDENCE_THRESHOLD` | `0.7` | 记忆存储最低置信度 |
+| `COMFYUI_POLL_TIMEOUT` | `300` | 单图最大等待秒数 |
+| `COMFYUI_MAX_RETRIES` | `2` | 单图重试次数 |
 
 ## License
 

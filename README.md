@@ -210,12 +210,20 @@ storyflow-ai/
 
 ### 前提
 
-- Python 3.11+, Node.js 18+, FFmpeg, Docker
-- **必填**：LLM API Key（OpenAI / DeepSeek / 智谱 / Moonshot 等，兼容 OpenAI API 格式）
-- **必填**：[ComfyUI](https://github.com/comfyanonymous/ComfyUI)（SDXL 图像生成）
-- **必填**：[CosyVoice](https://github.com/FunAudioLLM/CosyVoice)（TTS 语音合成）
+- Python 3.11+, Node.js 18+, FFmpeg
+- Docker（用于 PostgreSQL + Redis）
+- **LLM API Key**：兼容 OpenAI API 格式（推荐 [DeepSeek](https://platform.deepseek.com/)，几毛钱就能跑通）
 
-### 1. 基础服务
+> **ComfyUI 和 CosyVoice 是可选的。** 系统会自动检测这些服务是否可用，不可用时使用占位图/静默音频跑通全流程，方便你先验证 LLM 管线（剧本→角色→分镜）是否正常。接入真实服务后自动切换，无需改代码。
+
+### 运行模式
+
+| 模式 | 需要什么 | 能跑通哪些步骤 |
+|------|---------|---------------|
+| **LLM Only** | LLM API Key + PostgreSQL + Redis | 剧本 → 角色 → 分镜 → 占位图 → 静默音 → 视频 |
+| **全功能** | 上面全部 + ComfyUI + CosyVoice | 剧本 → 角色 → 分镜 → SD 出图 → 真实配音 → 视频 |
+
+### 1. 基础服务（PostgreSQL + Redis）
 
 ```bash
 # PostgreSQL + Redis
@@ -233,9 +241,15 @@ cd backend
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# 配置 .env（至少填写 LLM_API_KEY）
-# 推荐用 DeepSeek 测试，成本最低：
-#   LLM_API_KEY=sk-xxx  LLM_MODEL=deepseek-chat  LLM_BASE_URL=https://api.deepseek.com/v1
+# 配置 .env（必填 LLM_API_KEY，推荐用 DeepSeek 测试）
+cat > .env << 'EOF'
+LLM_API_KEY=sk-your-key-here
+LLM_MODEL=deepseek-chat
+LLM_BASE_URL=https://api.deepseek.com/v1
+DATABASE_URL=postgresql+asyncpg://storyflow:storyflow@localhost:5432/storyflow
+REDIS_URL=redis://localhost:6379/0
+STORAGE_PATH=./storage
+EOF
 
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
@@ -245,6 +259,22 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```bash
 cd frontend && npm install && npm run dev
 ```
+
+### 4. （可选）接入 ComfyUI 和 CosyVoice
+
+系统启动时会自动检测 `COMFYUI_URL`（默认 `http://localhost:8188`）和 `COSYVOICE_URL`（默认 `http://localhost:50000`）。如果检测到服务在线，图片和语音步骤会自动使用真实服务；否则使用 Mock 生成占位内容。
+
+```bash
+# ComfyUI（SDXL 图像生成）
+# 参考官方文档部署：https://github.com/comfyanonymous/ComfyUI
+# 确保加载了 SDXL 模型，启动后默认监听 8188 端口
+
+# CosyVoice（TTS 语音合成）
+# 参考官方文档部署：https://github.com/FunAudioLLM/CosyVoice
+# 启动 API 服务后默认监听 50000 端口
+```
+
+### 验证
 
 | 地址 | 说明 |
 |------|------|

@@ -1,18 +1,14 @@
-"""Storyboard Agent - converts script to scene-by-scene storyboard with structured output."""
+"""Storyboard Agent — convert script to scene-by-scene storyboard via LLM."""
 
-import json
 import logging
-from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from tenacity import retry, stop_after_attempt, wait_exponential
-
 from pydantic import BaseModel, Field
 
 from prompts import STORYBOARD_SYSTEM_PROMPT, STORYBOARD_USER_PROMPT
 from utils.json_helper import parse_json_response
-from workflows.state import StoryState
 from app.llm import get_precise_llm
 from configs.settings import settings
 
@@ -20,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 class StoryboardScene(BaseModel):
-    """A single storyboard scene."""
     scene: int = Field(description="场景序号（从1开始）")
     camera: str = Field(default="中景", description="镜头类型")
     duration: int = Field(default=5, ge=3, le=15, description="场景时长（秒）")
@@ -30,12 +25,11 @@ class StoryboardScene(BaseModel):
 
 
 class StoryboardOutput(BaseModel):
-    """Pydantic model for structured storyboard output."""
     scenes: list[StoryboardScene]
 
 
 def _build_character_descriptions(characters: list[dict]) -> str:
-    """Build a formatted string of character appearance descriptions."""
+    """Build formatted character appearance descriptions."""
     parts = []
     for char in characters:
         name = char.get("name", "未命名")
@@ -53,7 +47,6 @@ def _build_character_descriptions(characters: list[dict]) -> str:
 
 
 def _normalize_scene(scene: dict, index: int) -> dict:
-    """Normalize a single scene dict to the expected format."""
     return {
         "scene_no": scene.get("scene", index + 1),
         "camera": scene.get("camera", "中景"),
@@ -68,20 +61,13 @@ def _normalize_scene(scene: dict, index: int) -> dict:
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     before_sleep=lambda retry_state: logger.warning(
-        "Storyboard generation retry %d/3 for episode",
-        retry_state.attempt_number,
+        "Storyboard retry %d/3", retry_state.attempt_number,
     ),
 )
 async def _generate_storyboard_for_episode(
-    episode: dict,
-    character_descriptions: str,
-    llm,
+    episode: dict, character_descriptions: str, llm,
 ) -> list[dict]:
-    """Generate storyboard scenes for a single episode with retry.
-
-    Tries PydanticOutputParser first (structured output). If that fails,
-    falls back to raw JSON parsing with validation.
-    """
+    """Generate storyboard scenes for a single episode."""
     min_scenes, max_scenes = settings.SCENES_PER_EPISODE
 
     chat_prompt = ChatPromptTemplate.from_messages([
@@ -89,7 +75,7 @@ async def _generate_storyboard_for_episode(
         ("human", STORYBOARD_USER_PROMPT),
     ])
 
-    # Strategy 1: PydanticOutputParser for guaranteed structure
+    # Strategy 1: PydanticOutputParser
     try:
         parser = PydanticOutputParser(pydantic_object=StoryboardOutput)
         chain = chat_prompt | llm | parser
@@ -107,12 +93,11 @@ async def _generate_storyboard_for_episode(
 
         scenes = [_normalize_scene(s.model_dump(), i) for i, s in enumerate(result.scenes)]
         if scenes:
-            logger.debug("Storyboard parsed via PydanticOutputParser (%d scenes)", len(scenes))
             return scenes
     except Exception as e:
         logger.warning("PydanticOutputParser failed, falling back to raw JSON: %s", e)
 
-    # Strategy 2: Raw LLM output + json_helper parsing
+    # Strategy 2: Raw LLM output + json_helper
     chain = chat_prompt | llm
     response = await chain.ainvoke({
         "episode_no": episode.get("episode_no", 1),
@@ -125,10 +110,7 @@ async def _generate_storyboard_for_episode(
         "format_instructions": "",
     })
 
-    raw_text = response.content.strip()
-    parsed = parse_json_response(raw_text)
-
-    # Handle both list and single object
+    parsed = parse_json_response(response.content.strip())
     if isinstance(parsed, dict) and "scenes" in parsed:
         parsed = parsed["scenes"]
     if not isinstance(parsed, list):
@@ -137,18 +119,14 @@ async def _generate_storyboard_for_episode(
     return [_normalize_scene(s, i) for i, s in enumerate(parsed)]
 
 
-async def storyboard_agent(state: StoryState) -> dict:
+async def storyboard_agent(state: dict, context: dict) -> dict:
+    """Storyboard generation agent.
+
+    v3 signature: (state, context) -> dict partial update.
+    Uses StoryWorld from context to inject character consistency.
     """
-    Storyboard generation agent.
-    Takes episodes and enriched character data from state, and for each
-    episode calls the LLM to produce a scene-by-scene storyboard suitable
-    for image generation.
-    """
-    logger.info(
-        "storyboard_agent started | task_id=%s story_id=%s",
-        state.get("task_id"),
-        state.get("story_id"),
-    )
+    story_id = state.get("story_id", "")
+    logger.info("storyboard_agent started | story_id=%s", story_id)
 
     try:
         episodes = state.get("episodes", [])
@@ -161,53 +139,34 @@ async def storyboard_agent(state: StoryState) -> dict:
 
         character_descriptions = _build_character_descriptions(characters)
 
-        # Inject Memory-based character consistency section if available
-        consistency_section = state.get("_character_consistency", "")
-        if consistency_section:
-            character_descriptions += consistency_section
-            logger.info(
-                "Injected character consistency section from Memory | task_id=%s",
-                state.get("task_id"),
+        # If StoryWorld has richer character data, use it
+        story_world = context.get("story_world")
+        if story_world and story_world.characters:
+            world_descriptions = story_world.build_image_prompt_context(
+                [c["name"] for c in characters]
             )
+            if world_descriptions:
+                character_descriptions = world_descriptions
 
         llm = get_precise_llm()
 
         all_scenes: list[dict] = []
         for episode in episodes:
-            logger.info(
-                "Generating storyboard for episode %d | task_id=%s",
-                episode.get("episode_no", 0),
-                state.get("task_id"),
-            )
-            scenes = await _generate_storyboard_for_episode(
-                episode, character_descriptions, llm
-            )
+            logger.info("Generating storyboard for episode %d | story_id=%s",
+                        episode.get("episode_no", 0), story_id)
+            scenes = await _generate_storyboard_for_episode(episode, character_descriptions, llm)
             all_scenes.extend(scenes)
 
-        # Assign global scene number
+        # Assign global scene numbers
         for idx, scene in enumerate(all_scenes, 1):
             scene["scene_no"] = idx
-            scene["episode_no"] = scene.get("episode_no",
-                                            episodes[0].get("episode_no", 1)
-                                            if episodes else 1)
+            scene["episode_no"] = episode.get("episode_no", 1) if episodes else 1
 
-        logger.info(
-            "storyboard_agent completed | %d total scenes | task_id=%s",
-            len(all_scenes),
-            state.get("task_id"),
-        )
+        logger.info("storyboard_agent completed | %d scenes | story_id=%s",
+                    len(all_scenes), story_id)
 
-        return {
-            "storyboard": all_scenes,
-            "current_step": "storyboard",
-            "status": "storyboard_done",
-            "error": "",
-        }
+        return {"storyboard": all_scenes}
 
     except Exception as exc:
-        logger.exception("storyboard_agent failed | task_id=%s", state.get("task_id"))
-        return {
-            "current_step": "storyboard",
-            "status": "error",
-            "error": f"Storyboard generation failed: {exc}",
-        }
+        logger.exception("storyboard_agent failed | story_id=%s", story_id)
+        return {"status": "error", "error": f"Storyboard generation failed: {exc}"}

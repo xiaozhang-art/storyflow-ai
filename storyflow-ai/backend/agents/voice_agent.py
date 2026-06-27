@@ -1,193 +1,122 @@
+"""Voice Agent — generate speech via Capability Registry (CosyVoice or Mock)."""
+
 import logging
 from pathlib import Path
 
-import httpx
-
 from configs.settings import settings
-from workflows.state import StoryState
 
 logger = logging.getLogger(__name__)
 
-# Map character gender to CosyVoice speaker type
 SPEAKER_MAP = {
-    "男": "male",
-    "male": "male",
-    "男性": "male",
-    "女": "female",
-    "female": "female",
-    "女性": "female",
+    "男": "male", "male": "male", "男性": "male",
+    "女": "female", "female": "female", "女性": "female",
 }
 
 
-def _resolve_speaker(character_name: str, characters: list[dict]) -> str:
-    """Look up the character's gender and return the appropriate speaker type."""
-    for char in characters:
-        if char.get("name") == character_name:
-            gender = char.get("gender", "").lower()
-            return SPEAKER_MAP.get(gender, "female")
-    return "female"
+async def voice_agent(state: dict, context: dict) -> dict:
+    """Voice generation agent.
 
-
-async def _generate_voice_for_scene(
-    client: httpx.AsyncClient,
-    scene_no: int,
-    dialogue: str,
-    speaker: str,
-    story_id: str,
-    task_id: str,
-) -> dict | None:
-    """Call CosyVoice API to generate audio for a single scene's dialogue."""
-    if not dialogue.strip():
-        logger.debug(
-            "Scene %d has no dialogue, skipping voice generation | task_id=%s",
-            scene_no,
-            task_id,
-        )
-        return None
-
-    payload = {
-        "speaker": speaker,
-        "emotion": "neutral",
-        "text": dialogue,
-    }
-
-    resp = await client.post(
-        f"{settings.COSYVOICE_URL}/voice/generate",
-        json=payload,
-        timeout=120.0,
-    )
-    resp.raise_for_status()
-
-    result = resp.json()
-
-    # CosyVoice may return the audio as base64-encoded data, a URL, or bytes
-    audio_data = result.get("audio")
-    audio_url = result.get("audio_url")
-
-    save_dir = Path(settings.STORAGE_PATH) / "stories" / story_id / "audio"
-    save_dir.mkdir(parents=True, exist_ok=True)
-    save_path = save_dir / f"scene_{scene_no}.wav"
-
-    if audio_data:
-        # Base64-encoded audio bytes
-        import base64
-        audio_bytes = base64.b64decode(audio_data)
-        save_path.write_bytes(audio_bytes)
-    elif audio_url:
-        # Download from the returned URL
-        audio_resp = await client.get(audio_url, timeout=60.0)
-        audio_resp.raise_for_status()
-        save_path.write_bytes(audio_resp.content)
-    else:
-        # Maybe the response itself is binary audio – handle gracefully
-        logger.warning(
-            "Unexpected CosyVoice response for scene %d: %s | task_id=%s",
-            scene_no,
-            list(result.keys()),
-            task_id,
-        )
-        return None
-
-    voice_url = f"/storage/stories/{story_id}/audio/scene_{scene_no}.wav"
-
-    return {
-        "scene_no": scene_no,
-        "audio_path": str(save_path),
-        "audio_url": voice_url,
-        "speaker": speaker,
-        "text": dialogue,
-    }
-
-
-async def voice_agent(state: StoryState) -> dict:
+    v3 signature: (state, context) -> dict partial update.
+    Uses context["use_capability"]("generate_voice", ...) for TTS.
+    Falls back to silent WAV if capability unavailable.
     """
-    Voice generation agent.
-    For each storyboard scene that contains dialogue, calls the CosyVoice API
-    to generate speech audio.  Character gender is used to select the speaker
-    voice type (male / female).  Scenes without dialogue are skipped.
-    Returns partial results on failure.
-    """
-    logger.info(
-        "voice_agent started | task_id=%s story_id=%s",
-        state.get("task_id"),
-        state.get("story_id"),
-    )
-
     story_id = state.get("story_id", "unknown")
-    task_id = state.get("task_id", "")
     storyboard = state.get("storyboard", [])
     characters = state.get("characters", [])
+    use_capability = context.get("use_capability")
+
+    logger.info("voice_agent started | story_id=%s", story_id)
 
     if not storyboard:
-        logger.error("No storyboard scenes found | task_id=%s", task_id)
-        return {
-            "current_step": "voice",
-            "status": "error",
-            "error": "No storyboard scenes to generate voice for.",
-            "audios": [],
-        }
+        logger.error("No storyboard scenes | story_id=%s", story_id)
+        return {"audios": [], "status": "error", "error": "No storyboard scenes."}
 
     audios: list[dict] = []
     errors: list[str] = []
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        for scene in storyboard:
-            scene_no = scene.get("scene_no", 0)
-            dialogue = scene.get("dialogue", "")
-            scene_characters = scene.get("characters", [])
+    save_dir = Path(settings.STORAGE_PATH) / "stories" / story_id / "audio"
+    save_dir.mkdir(parents=True, exist_ok=True)
 
-            # Determine the primary speaker: use the first character in the scene
-            speaker = "female"  # default
-            if scene_characters:
-                speaker = _resolve_speaker(scene_characters[0], characters)
+    for scene in storyboard:
+        scene_no = scene.get("scene_no", 0)
+        dialogue = scene.get("dialogue", "")
 
+        if not dialogue.strip():
+            continue
+
+        # Determine speaker from first character in scene
+        speaker = "female"
+        scene_chars = scene.get("characters", [])
+        if scene_chars:
+            for char in characters:
+                if char.get("name") == scene_chars[0]:
+                    speaker = SPEAKER_MAP.get(char.get("gender", ""), "female")
+                    break
+
+        output_path = str(save_dir / f"scene_{scene_no}.wav")
+
+        if use_capability and dialogue.strip():
             try:
-                result = await _generate_voice_for_scene(
-                    client, scene_no, dialogue, speaker, story_id, task_id
-                )
-                if result:
-                    audios.append(result)
-                    logger.info(
-                        "Voice generated for scene %d (speaker=%s) | task_id=%s",
-                        scene_no,
-                        speaker,
-                        task_id,
-                    )
+                result = await use_capability("generate_voice", {
+                    "text": dialogue,
+                    "speaker": speaker,
+                    "output_path": output_path,
+                }, context)
+
+                if result.get("success"):
+                    audios.append({
+                        "scene_no": scene_no,
+                        "audio_path": result.get("file_path", output_path),
+                        "audio_url": f"/storage/stories/{story_id}/audio/scene_{scene_no}.wav",
+                        "speaker": speaker,
+                        "text": dialogue,
+                    })
+                    logger.info("Voice generated for scene %d (speaker=%s)", scene_no, speaker)
+                    continue
+                else:
+                    logger.warning("Voice capability failed for scene %d: %s",
+                                   scene_no, result.get("error"))
             except Exception as exc:
-                logger.warning(
-                    "Failed to generate voice for scene %d: %s | task_id=%s",
-                    scene_no,
-                    exc,
-                    task_id,
-                )
-                errors.append(f"Scene {scene_no}: {exc}")
+                logger.warning("Voice capability error for scene %d: %s", scene_no, exc)
 
-    if not audios:
-        error_msg = "All voice generations failed or no dialogues found."
-        logger.error("%s | task_id=%s", error_msg, task_id)
-        return {
-            "current_step": "voice",
-            "status": "error",
-            "error": error_msg,
-            "audios": [],
-        }
+        # Fallback: create a silent WAV
+        try:
+            _create_silent_wav(output_path, 3.0)
+            audios.append({
+                "scene_no": scene_no,
+                "audio_path": output_path,
+                "audio_url": f"/storage/stories/{story_id}/audio/scene_{scene_no}.wav",
+                "speaker": speaker,
+                "text": dialogue,
+            })
+        except Exception as exc:
+            errors.append(f"Scene {scene_no}: {exc}")
 
-    status_msg = "voice_done"
     error_msg = ""
-    if errors:
-        status_msg = "voice_partial"
+    status = "voice_done"
+    if not audios:
+        status = "error"
+        error_msg = "All voice generations failed or no dialogues found."
+    elif errors:
+        status = "voice_partial"
         error_msg = f"Partial failures: {'; '.join(errors)}"
 
-    logger.info(
-        "voice_agent completed | %d/%d audios generated | task_id=%s",
-        len(audios),
-        len(storyboard),
-        task_id,
-    )
+    logger.info("voice_agent completed | %d/%d audios | story_id=%s",
+                len(audios), len(storyboard), story_id)
 
-    return {
-        "audios": audios,
-        "current_step": "voice",
-        "status": status_msg,
-        "error": error_msg,
-    }
+    return {"audios": audios, "status": status, "error": error_msg}
+
+
+def _create_silent_wav(path: str, duration: float = 3.0):
+    """Create a minimal silent WAV file."""
+    import struct, wave
+
+    sample_rate = 22050
+    n_frames = int(sample_rate * duration)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"\x00\x00" * n_frames)

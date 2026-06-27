@@ -1,24 +1,20 @@
-"""Character Agent - enriches character visual descriptions with Pydantic validation."""
+"""Character Agent — enrich character visual descriptions via LLM."""
 
 import json
 import logging
-from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from tenacity import retry, stop_after_attempt, wait_exponential
-
 from pydantic import BaseModel, Field
 
 from prompts import CHARACTER_SYSTEM_PROMPT, CHARACTER_USER_PROMPT
-from workflows.state import StoryState
 from app.llm import get_precise_llm
 
 logger = logging.getLogger(__name__)
 
 
 class AppearanceCard(BaseModel):
-    """Structured visual description for SD image generation."""
     hair: str = Field(default="", description="发型、发色、长度（英文）")
     body: str = Field(default="", description="身高、体型、体态（英文）")
     cloth: str = Field(default="", description="服装风格、穿着、配饰（英文）")
@@ -26,17 +22,15 @@ class AppearanceCard(BaseModel):
 
 
 class EnrichedCharacter(BaseModel):
-    """A single enriched character."""
     name: str
     gender: str = "unknown"
     age: int | None = None
     appearance: AppearanceCard
-    personality: dict[str, Any] = Field(default_factory=dict)
+    personality: dict = Field(default_factory=dict)
     catchphrase: str = ""
 
 
 class EnrichedCharacterOutput(BaseModel):
-    """Pydantic model for LLM structured output of character enrichment."""
     characters: list[EnrichedCharacter]
 
 
@@ -50,7 +44,6 @@ class EnrichedCharacterOutput(BaseModel):
 async def _enrich_characters(characters: list[dict]) -> list[dict]:
     """Call the LLM to enrich character visual descriptions."""
     llm = get_precise_llm()
-
     parser = PydanticOutputParser(pydantic_object=EnrichedCharacterOutput)
 
     chat_prompt = ChatPromptTemplate.from_messages([
@@ -71,14 +64,11 @@ async def _enrich_characters(characters: list[dict]) -> list[dict]:
         )
         character_summaries.append(summary)
 
-    character_list_text = "\n".join(character_summaries)
-
     result = await chain.ainvoke({
-        "character_list": character_list_text,
+        "character_list": "\n".join(character_summaries),
         "format_instructions": parser.get_format_instructions(),
     })
 
-    # Convert Pydantic models to plain dicts
     enriched_list = []
     for ec in result.characters:
         enriched_list.append({
@@ -90,11 +80,10 @@ async def _enrich_characters(characters: list[dict]) -> list[dict]:
             "catchphrase": ec.catchphrase,
         })
 
-    # Merge with original character data to preserve any fields not overwritten
+    # Merge with original data, ensure all appearance keys exist
     merged = []
     for original, enriched in zip(characters, enriched_list):
         merged_char = {**original, **enriched}
-        # Ensure appearance has all four keys
         appearance = merged_char.get("appearance", {})
         if isinstance(appearance, str):
             appearance = {"hair": "", "body": "", "cloth": "", "face": appearance}
@@ -109,53 +98,33 @@ async def _enrich_characters(characters: list[dict]) -> list[dict]:
     return merged
 
 
-async def character_agent(state: StoryState) -> dict:
+async def character_agent(state: dict, context: dict) -> dict:
+    """Character enrichment agent.
+
+    v3 signature: (state, context) -> dict partial update.
     """
-    Character enrichment agent.
-    Takes the character list produced by the script agent, asks the LLM to
-    generate detailed visual appearance cards for each character, and returns
-    an updated characters list.
-    """
-    logger.info(
-        "character_agent started | task_id=%s story_id=%s",
-        state.get("task_id"),
-        state.get("story_id"),
-    )
+    story_id = state.get("story_id", "")
+    logger.info("character_agent started | story_id=%s", story_id)
 
     try:
         characters = state.get("characters", [])
         if not characters:
-            raise ValueError("No characters found in state – script agent may have failed.")
+            raise ValueError("No characters found — script agent may have failed.")
 
         enriched = await _enrich_characters(characters)
 
         logger.info(
-            "character_agent completed | %d characters enriched | task_id=%s",
-            len(enriched),
-            state.get("task_id"),
+            "character_agent completed | %d characters enriched | story_id=%s",
+            len(enriched), story_id,
         )
 
-        return {
-            "characters": enriched,
-            "current_step": "character",
-            "status": "character_done",
-            "error": "",
-        }
+        return {"characters": enriched}
 
     except Exception as exc:
-        logger.exception("character_agent failed | task_id=%s", state.get("task_id"))
-        # Fallback: return original characters if enrichment fails
+        logger.exception("character_agent failed | story_id=%s", story_id)
+        # Fallback: return original characters
         original = state.get("characters", [])
         if original:
-            logger.warning("Falling back to original characters (%d) after failure", len(original))
-            return {
-                "characters": original,
-                "current_step": "character",
-                "status": "character_done",
-                "error": f"Character enrichment failed, using originals: {exc}",
-            }
-        return {
-            "current_step": "character",
-            "status": "error",
-            "error": f"Character enrichment failed: {exc}",
-        }
+            logger.warning("Falling back to original characters (%d)", len(original))
+            return {"characters": original}
+        return {"status": "error", "error": f"Character enrichment failed: {exc}"}

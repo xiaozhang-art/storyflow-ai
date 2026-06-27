@@ -243,6 +243,73 @@ class GenerateVoiceCapability(Capability):
         return {"file_path": output_path, "success": bool(audio_content)}
 
 
+class MockImageCapability(Capability):
+    """Mock image generation — creates colored placeholders when ComfyUI is unavailable."""
+
+    @property
+    def description(self) -> str:
+        return "[Mock] Generate placeholder images (ComfyUI not connected)"
+
+    async def execute(self, params: dict, context: dict) -> dict:
+        from PIL import Image, ImageDraw, ImageFont
+        import os, random
+
+        prompt = params.get("prompt", "")
+        output_path = params.get("output_path", "")
+        if not output_path:
+            return {"success": False, "error": "No output_path"}
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        colors = [(66,133,244),(234,67,53),(251,188,4),(52,168,83),(171,71,188),(0,172,193)]
+        color = random.choice(colors)
+        img = Image.new("RGB", (1024, 1024), color)
+        draw = ImageDraw.Draw(img)
+
+        try:
+            font_l = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+            font_s = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+        except Exception:
+            font_l = ImageFont.load_default()
+            font_s = ImageFont.load_default()
+
+        draw.text((512, 420), "(Mock Image)", fill="white", anchor="mm", font=font_l)
+        draw.text((512, 490), "ComfyUI not connected", fill="white", anchor="mm", font=font_s)
+        preview = (prompt[:80] + "...") if len(prompt) > 80 else prompt
+        draw.text((512, 560), preview, fill=(255,255,255,180), anchor="mm", font=font_s)
+
+        img.save(output_path, "PNG")
+        return {"file_path": output_path, "success": True}
+
+
+class MockVoiceCapability(Capability):
+    """Mock voice generation — creates silent WAV when CosyVoice is unavailable."""
+
+    @property
+    def description(self) -> str:
+        return "[Mock] Generate silent WAV (CosyVoice not connected)"
+
+    async def execute(self, params: dict, context: dict) -> dict:
+        import wave, os
+
+        output_path = params.get("output_path", "")
+        if not output_path:
+            return {"success": False, "error": "No output_path"}
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        sample_rate = 22050
+        duration = 3.0
+        n_frames = int(sample_rate * duration)
+
+        with wave.open(output_path, "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(b"\x00\x00" * n_frames)
+
+        return {"file_path": output_path, "success": True}
+
+
 class MergeVideoCapability(Capability):
     """视频合成能力 — 使用 FFmpeg."""
 
@@ -439,10 +506,56 @@ class CapabilityRegistry:
             for name, cap in self._capabilities.items()
         ]
 
-    def setup_defaults(self):
-        """注册默认能力集."""
-        self.register(CAP_GENERATE_IMAGE, GenerateImageCapability())
-        self.register(CAP_GENERATE_VOICE, GenerateVoiceCapability())
+    def setup_defaults(self, mock_unavailable: bool = True):
+        """注册默认能力集.
+
+        Args:
+            mock_unavailable: 如果为 True，检测真实服务可用性，不可达时自动降级为 Mock.
+        """
+        import httpx
+
+        # --- generate_image ---
+        try:
+            httpx.get(f"{self._get_comfyui_url()}/system_stats", timeout=3).raise_for_status()
+            self.register(CAP_GENERATE_IMAGE, GenerateImageCapability())
+            logger.info("[CapabilityRegistry] generate_image → ComfyUI (real)")
+        except Exception:
+            if mock_unavailable:
+                self.register(CAP_GENERATE_IMAGE, MockImageCapability())
+                logger.warning("[CapabilityRegistry] generate_image → Mock (ComfyUI not reachable)")
+            else:
+                self.register(CAP_GENERATE_IMAGE, GenerateImageCapability())
+                logger.info("[CapabilityRegistry] generate_image → ComfyUI (registered, will fail at runtime)")
+
+        # --- generate_voice ---
+        try:
+            httpx.get(f"{self._get_cosyvoice_url()}/health", timeout=3).raise_for_status()
+            self.register(CAP_GENERATE_VOICE, GenerateVoiceCapability())
+            logger.info("[CapabilityRegistry] generate_voice → CosyVoice (real)")
+        except Exception:
+            if mock_unavailable:
+                self.register(CAP_GENERATE_VOICE, MockVoiceCapability())
+                logger.warning("[CapabilityRegistry] generate_voice → Mock (CosyVoice not reachable)")
+            else:
+                self.register(CAP_GENERATE_VOICE, GenerateVoiceCapability())
+                logger.info("[CapabilityRegistry] generate_voice → CosyVoice (registered, will fail at runtime)")
+
         self.register(CAP_MERGE_VIDEO, MergeVideoCapability())
         self.register(CAP_GENERATE_STORYBOARD, GenerateStoryboardCapability())
         logger.info("[CapabilityRegistry] Default capabilities registered")
+
+    @staticmethod
+    def _get_comfyui_url() -> str:
+        try:
+            from configs.settings import settings
+            return settings.COMFYUI_URL
+        except Exception:
+            return "http://localhost:8188"
+
+    @staticmethod
+    def _get_cosyvoice_url() -> str:
+        try:
+            from configs.settings import settings
+            return settings.COSYVOICE_URL
+        except Exception:
+            return "http://localhost:50000"

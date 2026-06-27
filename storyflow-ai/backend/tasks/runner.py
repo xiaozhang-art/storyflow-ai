@@ -1,10 +1,14 @@
 """Task runner - executes the story generation workflow with progress tracking and DB persistence.
 
-Supports two execution backends:
-1. Agent OS Runtime (v2.0) - with Hook, Memory, Skill, Session, A2A
-2. LangGraph workflow (v1.0) - fallback for backward compatibility
+Supports three execution backends:
+1. Runtime v3 (Project Runtime) - StoryWorld + Quality Engine + Project/Checkpoint + Capability
+2. Agent OS Runtime (v2.0) - with Hook, Memory, Skill, Session, A2A
+3. LangGraph workflow (v1.0) - fallback for backward compatibility
 
-Set USE_RUNTIME=true to use the new Runtime backend.
+Environment variables:
+  USE_RUNTIME_V3=true  → v3 (Project Runtime, recommended)
+  USE_RUNTIME=true     → v2.0 (Agent OS Runtime)
+  (default)              → v1.0 (LangGraph)
 """
 
 import json
@@ -272,11 +276,14 @@ async def run_story_generation(
     """Run the full story generation workflow with progress tracking and DB persistence.
 
     This is designed to run as a background asyncio task.
-    Supports both Runtime (v2.0) and LangGraph (v1.0) backends.
+    Supports v3 (Project Runtime), v2.0 (Agent OS Runtime), and v1.0 (LangGraph) backends.
     """
-    use_runtime = os.environ.get("USE_RUNTIME", "false").lower() in ("true", "1", "yes")
+    use_v3 = os.environ.get("USE_RUNTIME_V3", "false").lower() in ("true", "1", "yes")
+    use_v2 = os.environ.get("USE_RUNTIME", "false").lower() in ("true", "1", "yes")
 
-    if use_runtime:
+    if use_v3:
+        await _run_with_v3_backend(task_id, story_id, prompt, genre)
+    elif use_v2:
         await _run_with_runtime_backend(task_id, story_id, prompt, genre)
     else:
         await _run_with_langgraph_backend(task_id, story_id, prompt, genre)
@@ -319,6 +326,89 @@ async def _run_with_runtime_backend(task_id, story_id, prompt, genre):
     except Exception as e:
         error_msg = f"{type(e).__name__}: {str(e)}"
         logger.error("Runtime generation failed: task=%s, error=%s", task_id, error_msg)
+        logger.error(traceback.format_exc())
+        await set_task_status(task_id, {
+            "task_id": task_id, "status": "failed",
+            "progress": STEP_PROGRESS.get("video", 95),
+            "current_step": "error", "message": error_msg,
+        })
+        await _update_db_progress(task_id, story_id, "init", error=error_msg)
+
+
+async def _run_with_v3_backend(task_id, story_id, prompt, genre):
+    """Execute via Runtime v3 (Project Runtime) — StoryWorld + Quality Engine + Checkpoint."""
+    logger.info("Starting Runtime v3 generation: task=%s, story=%s", task_id, story_id)
+
+    try:
+        from configs.settings import settings
+        from runtime.v3 import Project, ProjectRuntime
+        from agents.script_agent import script_agent
+        from agents.character_agent import character_agent
+        from agents.storyboard_agent import storyboard_agent
+        from agents.image_agent import image_agent
+        from agents.voice_agent import voice_agent
+        from agents.video_agent import video_agent
+
+        await _update_progress(task_id, "init")
+        await _update_db_progress(task_id, story_id, "init")
+
+        # Create Project
+        project = Project(
+            id=story_id,
+            title="",
+            genre=genre,
+            prompt=prompt,
+            total_episodes=settings.MAX_EPISODES,
+        )
+
+        # Create ProjectRuntime
+        runtime = ProjectRuntime(
+            project=project,
+            storage_path=settings.STORAGE_PATH,
+        )
+
+        # Register agents
+        runtime.register_agent("script", script_agent)
+        runtime.register_agent("character", character_agent)
+        runtime.register_agent("storyboard", storyboard_agent)
+        runtime.register_agent("image", image_agent)
+        runtime.register_agent("voice", voice_agent)
+        runtime.register_agent("video", video_agent)
+
+        # Set progress callback → Redis + WebSocket
+        async def v3_progress(progress, step, message):
+            await set_task_status(task_id, {
+                "task_id": task_id,
+                "status": "running",
+                "progress": progress,
+                "current_step": step,
+                "message": message,
+            })
+            await _update_db_progress(task_id, story_id, step)
+        runtime.set_progress_callback(v3_progress)
+
+        # Run pipeline
+        result = await runtime.run()
+
+        # Persist all results to DB
+        await _persist_runtime_results(story_id, result)
+
+        if result.get("status") == "completed":
+            await _update_progress(task_id, "done")
+            await _update_db_progress(task_id, story_id, "done")
+            logger.info("Runtime v3 generation completed: task=%s, story=%s", task_id, story_id)
+        else:
+            error = result.get("error", "Unknown error")
+            await set_task_status(task_id, {
+                "task_id": task_id, "status": "failed",
+                "progress": STEP_PROGRESS.get("video", 95),
+                "current_step": "error", "message": error,
+            })
+            await _update_db_progress(task_id, story_id, "init", error=error)
+
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        logger.error("Runtime v3 generation failed: task=%s, error=%s", task_id, error_msg)
         logger.error(traceback.format_exc())
         await set_task_status(task_id, {
             "task_id": task_id, "status": "failed",

@@ -51,6 +51,70 @@ async def start_generation(story_id: UUID, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/{story_id}/world")
+async def get_story_world(story_id: UUID):
+    """获取 StoryWorld 快照 (v3 Runtime)."""
+    from configs.settings import settings
+    from runtime.v3.workspace import Workspace
+    workspace = Workspace(settings.STORAGE_PATH, str(story_id))
+    world_data = workspace.load_world()
+    if not world_data:
+        raise HTTPException(status_code=404, detail="StoryWorld not found (run with USE_RUNTIME_V3=true)")
+    return world_data
+
+
+@router.post("/{story_id}/patch")
+async def apply_world_patch(story_id: UUID, patch: dict):
+    """应用用户 Patch 到 StoryWorld.
+
+    Body: {"character_name": "林晓", "field_path": "appearance.cloth", "new_value": "black armor"}
+    """
+    from configs.settings import settings
+    from runtime.v3.workspace import Workspace
+    from runtime.v3.world.story_world import StoryWorld
+
+    workspace = Workspace(settings.STORAGE_PATH, str(story_id))
+    world_data = workspace.load_world()
+    if not world_data:
+        raise HTTPException(status_code=404, detail="StoryWorld not found")
+
+    world = StoryWorld.from_dict(world_data)
+    name = patch.get("character_name", "")
+    field_path = patch.get("field_path", "")
+    new_value = patch.get("new_value", "")
+
+    if not name or not field_path:
+        raise HTTPException(status_code=400, detail="character_name and field_path required")
+
+    event = world.apply_patch(name, field_path, "", new_value)
+    workspace.save_world(world.to_dict())
+
+    return {"status": "patched", "world_version": world.version, "event": event.description if event else ""}
+
+
+@router.get("/{story_id}/checkpoints")
+async def list_checkpoints(story_id: UUID):
+    """列出项目的所有 Checkpoint (v3 Runtime)."""
+    from configs.settings import settings
+    from runtime.v3.workspace import Workspace
+    workspace = Workspace(settings.STORAGE_PATH, str(story_id))
+    return {"checkpoints": workspace.list_checkpoints()}
+
+
+@router.post("/{story_id}/resume")
+async def resume_generation(story_id: UUID, db: AsyncSession = Depends(get_db)):
+    """从最近的 Checkpoint 恢复生成 (v3 Runtime)."""
+    story = await story_service.get_story(db, story_id)
+    if not story:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    try:
+        task = await story_service.start_generation(db, story_id, resume=True)
+        return {"task_id": str(task.id), "message": "Generation resumed from checkpoint"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{story_id}/result")
 async def get_story_result(story_id: UUID, db: AsyncSession = Depends(get_db)):
     """Get the generation result for a story."""

@@ -217,21 +217,21 @@ storyflow-ai/
 │   ├── services/                        # 业务逻辑
 │   ├── repositories/                    # 数据访问层
 │   ├── prompts/                         # Prompt 模板
-│   └── runtime/v3/                      # Project Runtime 核心
-│       ├── __init__.py                  # 统一导出, __version__ = "3.1.0"
-│       ├── project.py                   # Project + ProjectRuntime (顶层编排, 7-step pipeline)
-│       ├── world/
-│       │   └── story_world.py           # StoryWorld (Story Bible + Character + Location + Timeline)
-│       ├── quality/
-│       │   └── engine.py                # QualityEngine + 7 个 Checker
-│       ├── capability/
-│       │   └── registry.py              # CapabilityRegistry + 5 个内置 Capability (API + Mock)
-│       ├── hook/
-│       │   └── manager.py               # HookManager (16 种事件)
-│       ├── checkpoint/
-│       │   └── store.py                 # CheckpointStore (存档/恢复)
-│       ├── event_bus.py                 # EventBus (轻量本地事件总线)
-│       └── workspace.py                 # Workspace (文件工作区)
+│   ├── runtime/v3/                      # Story Runtime 核心 (v3.2)
+│       ├── __init__.py                  # 统一导出, __version__ = "3.2.0"
+│       ├── project.py                   # Project + ProjectRuntime
+│       ├── context/
+│       │   └── story_context.py           # StoryContext (全局共享状态)
+│       ├── blackboard/
+│       │   └── blackboard.py              # Blackboard (任务黑板, DAG 调度)
+│       ├── agent/
+│       │   └── base.py                   # BaseAgent + AgentAdapter + AgentRegistry
+│       ├── scene/
+│       │   └── scene.py                   # Scene (调度单元, 状态机)
+│       ├── planner/
+│       │   └── planner.py                 # PlannerAgent (任务 DAG 拆解)
+│       ├── engine/
+│       │   └── engine.py                  # EventDrivenEngine (事件驱动执行)
 ├── frontend/
 │   └── src/
 │       ├── pages/                       # HomePage / StoryPage / ResultPage

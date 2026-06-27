@@ -2,10 +2,13 @@
 
 # StoryFlow AI
 
-**AI 漫剧自动生成平台 — Project Runtime v3**
+**AI 漫剧自动生成平台 — Project Runtime v3.1**
 
-用户输入一段创意，系统通过 6 个 Agent 串联协作，自动完成
-**剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 配音合成 → 视频导出**。
+用户输入一段创意，系统通过 7 个 Agent 串联协作，自动完成
+**剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 图生视频 → 配音合成 → 视频导出**。
+
+所有外部能力（出图、图生视频、配音）均通过**云端 API** 调用，无需本地部署 ComfyUI 或 CosyVoice。
+只配一个 LLM API Key 就能跑通全流程（图像/视频/语音自动降级为 Mock）。
 
 [核心设计](#核心设计) · [架构](#架构) · [项目结构](#项目结构) · [快速开始](#快速开始) · [API](#api) · [配置](#配置)
 
@@ -84,7 +87,7 @@ Project
 └── Status            created → running → paused → completed / failed
 ```
 
-**Checkpoint 像游戏存档**：每完成一个管线步骤（script → character → storyboard → image → voice → video），自动保存当前 StoryWorld 完整快照、所有已生成的文件路径、当前进度。今天生成 1-3 集后关闭浏览器，明天通过 `POST /api/story/{id}/resume` 从第 4 集继续。Checkpoint 恢复时自动还原 StoryWorld 状态，Agent 拿到的是和上次结束时完全一致的知识。
+**Checkpoint 像游戏存档**：每完成一个管线步骤自动保存当前 StoryWorld 完整快照、所有已生成的文件路径、当前进度。今天生成到一半关闭浏览器，明天通过 `POST /api/story/{id}/resume` 从断点继续。Checkpoint 恢复时自动还原 StoryWorld 状态，Agent 拿到的是和上次结束时完全一致的知识。
 
 ```bash
 # 查看所有存档
@@ -114,9 +117,17 @@ ProjectRuntime
 └── EventBus            轻量本地事件总线 (Python 进程内)
 ```
 
+### 7-Step Pipeline
+
+```
+script → character → storyboard → image → image_to_video → voice → video
+  │         │           │           │          │             │        │
+  LLM       LLM         LLM       API出图    API图生视频    API配音   FFmpeg拼接
+```
+
 ### 关键设计决策
 
-**Agent 只做 Planner，能力由 Capability 提供。** Image Agent 不直接调用 ComfyUI API，而是声明 `use_capability("generate_image", {...})`。以后从 Stable Diffusion 切换到 FLUX，只需实现新的 `GenerateImageCapability` 并注册，不动 Agent 代码。
+**Agent 只做 Planner，能力由 Capability 提供。** Image Agent 不直接调用任何图像 API，而是声明 `use_capability("generate_image", {...})`。以后从通义万相切换到 Midjourney，只需实现新的 Capability 并注册，不动 Agent 代码。
 
 **所有横切逻辑走 Hook，不污染 Agent。** 日志、Token 统计、Langfuse Tracing、进度推送、自动重试 — 全部通过 HookManager 监听 16 种生命周期事件挂接：
 
@@ -130,14 +141,17 @@ ProjectRuntime
 | 世界状态 | `WORLD_UPDATE` |
 | 项目生命周期 | `PROJECT_START` / `PROJECT_COMPLETE` / `PROJECT_RESUME` / `PROJECT_ERROR` |
 
-**4 个内置 Capability：**
+**5 个内置 Capability（全部支持云端 API + Mock 自动降级）：**
 
-| Capability | 底层服务 | 说明 |
-|-----------|---------|------|
-| `generate_image` | ComfyUI (SDXL) | 文生图，支持 SDXL workflow + poll |
-| `generate_voice` | CosyVoice | TTS 语音合成，支持 base64/URL/raw 三种响应 |
-| `merge_video` | FFmpeg | Scene 级视频拼接 + 字幕烧录 |
-| `generate_storyboard` | LLM | 通过 `context["llm_caller"]` 注入，不直接耦合 |
+| Capability | 可选 Provider | 说明 |
+|-----------|-------------|------|
+| `generate_image` | **dashscope**(通义万相), **openai**(DALL·E), mock | 文生图 |
+| `image_to_video` | **kling**(可灵), mock | 图生视频 — 漫剧核心步骤 |
+| `generate_voice` | **dashscope_tts**(CosyVoice云端), **cosyvoice_cloud**, mock | TTS 语音合成 |
+| `merge_video` | FFmpeg (本地) | 视频片段拼接 + 字幕烧录 |
+| `generate_storyboard` | LLM (注入) | 分镜生成 |
+
+> **自动降级**：任何 API 没配 Key 时自动使用 Mock，不用改代码。配了 Key 就自动用真实服务。
 
 ## 技术栈
 
@@ -145,21 +159,22 @@ ProjectRuntime
 |------|------|
 | 前端 | React 18, TypeScript, Vite 5, Ant Design 5 |
 | 后端 | Python 3.11+, FastAPI, SQLAlchemy 2.0 (async), Pydantic 2.0 |
-| Agent | LangChain ChatOpenAI, 6-Agent 串行管线 |
-| Runtime | Project Runtime v3 (StoryWorld + QualityEngine + Checkpoint + Capability + Hook) |
+| Agent | LangChain ChatOpenAI, 7-Agent 串行管线 |
+| Runtime | Project Runtime v3.1 (StoryWorld + QualityEngine + Checkpoint + Capability + Hook) |
 | 数据库 | PostgreSQL 16, Redis 7 |
-| 图像 | Stable Diffusion XL via ComfyUI |
-| 语音 | CosyVoice TTS |
-| 视频 | FFmpeg |
+| 文生图 | 通义万相 / DALL·E (云端 API) |
+| 图生视频 | 可灵 AI (云端 API) |
+| 语音 | CosyVoice 云端 / DashScope TTS (云端 API) |
+| 视频 | FFmpeg (本地拼接) |
 
 ## 项目结构
 
 ```
 storyflow-ai/
 ├── backend/
-│   ├── main.py                          # FastAPI 入口 (v3.0.0)
+│   ├── main.py                          # FastAPI 入口 (v3.1)
 │   ├── .env                             # 环境变量
-│   ├── configs/settings.py              # 配置管理
+│   ├── configs/settings.py              # 配置管理（API Provider 模式）
 │   ├── models/                          # SQLAlchemy ORM
 │   │   ├── story.py                     # Story
 │   │   ├── episode.py                   # Episode
@@ -169,13 +184,14 @@ storyflow-ai/
 │   ├── api/                             # API 路由
 │   │   ├── story.py                     # 故事 CRUD + world/patch/checkpoints/resume
 │   │   └── task.py                      # 任务状态 + WebSocket 进度
-│   ├── agents/                          # 6 个 Agent
-│   │   ├── script_agent.py              # 剧本生成
-│   │   ├── character_agent.py           # 角色设计
-│   │   ├── storyboard_agent.py          # 分镜编排
-│   │   ├── image_agent.py               # 图片生成
-│   │   ├── voice_agent.py               # 配音合成
-│   │   └── video_agent.py               # 视频导出
+│   ├── agents/                          # 7 个 Agent
+│   │   ├── script_agent.py              # 剧本生成 (LLM)
+│   │   ├── character_agent.py           # 角色设计 (LLM)
+│   │   ├── storyboard_agent.py          # 分镜编排 (LLM)
+│   │   ├── image_agent.py               # 图片生成 (API)
+│   │   ├── image_to_video_agent.py      # 图生视频 (API) ← v3.1 新增
+│   │   ├── voice_agent.py               # 配音合成 (API)
+│   │   └── video_agent.py               # 视频拼接导出 (FFmpeg)
 │   ├── tasks/runner.py                  # 管线编排 → ProjectRuntime
 │   ├── app/                             # database / redis / llm 基础设施
 │   ├── schemas/                         # Pydantic 请求/响应模型
@@ -183,14 +199,14 @@ storyflow-ai/
 │   ├── repositories/                    # 数据访问层
 │   ├── prompts/                         # Prompt 模板
 │   └── runtime/v3/                      # Project Runtime 核心
-│       ├── __init__.py                  # 统一导出, __version__ = "3.0.0"
-│       ├── project.py                   # Project + ProjectRuntime (顶层编排)
+│       ├── __init__.py                  # 统一导出, __version__ = "3.1.0"
+│       ├── project.py                   # Project + ProjectRuntime (顶层编排, 7-step pipeline)
 │       ├── world/
 │       │   └── story_world.py           # StoryWorld (Story Bible + Character + Location + Timeline)
 │       ├── quality/
 │       │   └── engine.py                # QualityEngine + 7 个 Checker
 │       ├── capability/
-│       │   └── registry.py              # CapabilityRegistry + 4 个内置 Capability
+│       │   └── registry.py              # CapabilityRegistry + 5 个内置 Capability (API + Mock)
 │       ├── hook/
 │       │   └── manager.py               # HookManager (16 种事件)
 │       ├── checkpoint/
@@ -202,7 +218,7 @@ storyflow-ai/
 │       ├── pages/                       # HomePage / StoryPage / ResultPage
 │       └── api/                         # API + WebSocket 客户端
 └── deploy/
-    ├── docker-compose.yml               # PostgreSQL + Redis + ComfyUI + CosyVoice
+    ├── docker-compose.yml               # PostgreSQL + Redis
     └── .env.example                     # 环境变量模板
 ```
 
@@ -210,15 +226,23 @@ storyflow-ai/
 
 ### 前提
 
-- Python 3.11+, Node.js 18+, FFmpeg, Docker
-- **必填**：LLM API Key（OpenAI / DeepSeek / 智谱 / Moonshot 等，兼容 OpenAI API 格式）
-- **必填**：[ComfyUI](https://github.com/comfyanonymous/ComfyUI)（SDXL 图像生成）
-- **必填**：[CosyVoice](https://github.com/FunAudioLLM/CosyVoice)（TTS 语音合成）
+- Python 3.11+, Node.js 18+, FFmpeg
+- Docker（用于 PostgreSQL + Redis）
+- **LLM API Key**：兼容 OpenAI API 格式（推荐 [DeepSeek](https://platform.deepseek.com/)，几毛钱就能跑通）
 
-### 1. 基础服务
+> **只需要一个 LLM API Key 就能跑通全流程。** 图片/视频/语音步骤会自动使用 Mock 占位内容。配好对应的 API Key 后自动切换为真实服务，无需改代码。
+
+### 运行模式
+
+| 模式 | 需要什么 | 能跑通哪些步骤 |
+|------|---------|---------------|
+| **纯 LLM** | LLM API Key + PostgreSQL + Redis | 剧本 → 角色 → 分镜 → 占位图 → FFmpeg 静态视频 → 静默音 → 最终视频 |
+| **出图模式** | 上面 + `IMAGE_API_KEY` | 剧本 → 角色 → 分镜 → **真实图片** → FFmpeg 静态视频 → 静默音 → 最终视频 |
+| **全功能模式** | 上面 + `VIDEO_API_KEY` + `VOICE_API_KEY` | 剧本 → 角色 → 分镜 → 真实图片 → **图生视频** → **真实配音** → 最终视频 |
+
+### 1. 基础服务（PostgreSQL + Redis）
 
 ```bash
-# PostgreSQL + Redis
 docker run -d --name sf-pg -p 5432:5432 \
   -e POSTGRES_USER=storyflow -e POSTGRES_PASSWORD=storyflow -e POSTGRES_DB=storyflow \
   postgres:16-alpine
@@ -233,9 +257,20 @@ cd backend
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# 配置 .env（至少填写 LLM_API_KEY）
-# 推荐用 DeepSeek 测试，成本最低：
-#   LLM_API_KEY=sk-xxx  LLM_MODEL=deepseek-chat  LLM_BASE_URL=https://api.deepseek.com/v1
+# 最小配置 — 只填 LLM API Key 即可跑通全流程
+cat > .env << 'EOF'
+LLM_API_KEY=sk-your-key-here
+LLM_MODEL=deepseek-chat
+LLM_BASE_URL=https://api.deepseek.com/v1
+DATABASE_URL=postgresql+asyncpg://storyflow:storyflow@localhost:5432/storyflow
+REDIS_URL=redis://localhost:6379/0
+STORAGE_PATH=./storage
+
+# 图片/视频/语音不配 Key 自动用 Mock
+IMAGE_API_PROVIDER=mock
+VIDEO_API_PROVIDER=mock
+VOICE_API_PROVIDER=mock
+EOF
 
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
@@ -245,6 +280,31 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```bash
 cd frontend && npm install && npm run dev
 ```
+
+### 4. （可选）接入真实 API
+
+在 `.env` 中配置对应的 API Key，系统会自动切换为真实服务：
+
+```bash
+# 通义万相 出图（阿里云 DashScope）
+IMAGE_API_PROVIDER=dashscope
+IMAGE_API_KEY=sk-your-dashscope-key
+IMAGE_MODEL=wanx-v1
+
+# 可灵 AI 图生视频
+VIDEO_API_PROVIDER=kling
+VIDEO_API_KEY=your-kling-key
+VIDEO_MODEL=kling-v1
+
+# CosyVoice 云端 TTS
+VOICE_API_PROVIDER=dashscope_tts
+VOICE_API_KEY=sk-your-dashscope-key
+VOICE_MODEL=cosyvoice-v1
+```
+
+> 只要配了 Key 就自动用真实服务，不配就 Mock，不需要改任何代码。
+
+### 验证
 
 | 地址 | 说明 |
 |------|------|
@@ -315,19 +375,46 @@ curl -X POST /api/story/{id}/resume
 
 ## 配置
 
+### 基础配置
+
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `LLM_API_KEY` | — | **必填** LLM API 密钥 |
 | `LLM_MODEL` | `gpt-4o` | 模型名称 |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API 地址 |
-| `DATABASE_URL` | `postgresql+asyncpg://storyflow:storyflow@localhost:5432/storyflow` | PostgreSQL 连接 |
+| `DATABASE_URL` | `postgresql+asyncpg://...` | PostgreSQL 连接 |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis 连接 |
-| `COMFYUI_URL` | `http://localhost:8188` | ComfyUI 服务地址 |
-| `COSYVOICE_URL` | `http://localhost:50000` | CosyVoice 服务地址 |
 | `STORAGE_PATH` | `./storage` | 文件存储根目录 |
 | `MAX_EPISODES` | `6` | 单次生成最大集数 |
-| `COMFYUI_POLL_TIMEOUT` | `300` | 单图最大等待时间（秒） |
-| `COMFYUI_MAX_RETRIES` | `2` | 单图生成重试次数 |
+
+### 文生图 API
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `IMAGE_API_PROVIDER` | `dashscope` | Provider: `dashscope` / `openai` / `mock` |
+| `IMAGE_API_KEY` | — | API 密钥（不填自动 Mock） |
+| `IMAGE_API_BASE_URL` | `https://dashscope.aliyuncs.com/api/v1` | API 地址 |
+| `IMAGE_MODEL` | `wanx-v1` | 模型名称 |
+| `IMAGE_SIZE` | `1024*1024` | 图片尺寸 |
+
+### 图生视频 API（漫剧核心）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VIDEO_API_PROVIDER` | `kling` | Provider: `kling` / `mock` |
+| `VIDEO_API_KEY` | — | API 密钥（不填自动 FFmpeg 静态视频） |
+| `VIDEO_API_BASE_URL` | `https://api.klingai.com/v1` | API 地址 |
+| `VIDEO_MODEL` | `kling-v1` | 模型名称 |
+| `VIDEO_DURATION` | `5` | 单片段时长（秒） |
+
+### TTS 配音 API
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VOICE_API_PROVIDER` | `dashscope_tts` | Provider: `dashscope_tts` / `cosyvoice_cloud` / `mock` |
+| `VOICE_API_KEY` | — | API 密钥（不填自动静默音） |
+| `VOICE_API_BASE_URL` | `https://dashscope.aliyuncs.com/api/v1` | API 地址 |
+| `VOICE_MODEL` | `cosyvoice-v1` | 模型/音色名称 |
 
 ## License
 

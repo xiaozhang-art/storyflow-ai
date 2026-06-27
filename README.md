@@ -352,8 +352,8 @@ curl -X POST /api/story/{id}/resume
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API 地址 |
 | `DATABASE_URL` | `postgresql+asyncpg://storyflow:storyflow@localhost:5432/storyflow` | PostgreSQL 连接 |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis 连接 |
-| `COMFYUI_URL` | `http://localhost:8188` | ComfyUI 服务地址 |
-| `COSYVOICE_URL` | `http://localhost:50000` | CosyVoice 服务地址 |
+| `COMFYUI_URL` | `http://localhost:8188` | ComfyUI 服务地址（可选，不可用时自动 Mock） |
+| `COSYVOICE_URL` | `http://localhost:50000` | CosyVoice 服务地址（可选，不可用时自动 Mock） |
 | `STORAGE_PATH` | `./storage` | 文件存储根目录 |
 | `MAX_EPISODES` | `6` | 单次生成最大集数 |
 | `COMFYUI_POLL_TIMEOUT` | `300` | 单图最大等待时间（秒） |

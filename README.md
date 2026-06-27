@@ -2,13 +2,16 @@
 
 # StoryFlow AI
 
-**AI 漫剧自动生成平台 — Project Runtime v3.1**
+**AI 漫剧自动生成平台 — Story Runtime v3.2**
 
-用户输入一段创意，系统通过 7 个 Agent 串联协作，自动完成
+用户输入一段创意，系统通过 7 个 Agent 事件驱动协作，自动完成
 **剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 图生视频 → 配音合成 → 视频导出**。
 
-所有外部能力（出图、图生视频、配音）均通过**云端 API** 调用，无需本地部署 ComfyUI 或 CosyVoice。
-只配一个 LLM API Key 就能跑通全流程（图像/视频/语音自动降级为 Mock）。
+- **事件驱动 + Blackboard 调度**：Agent 不直接互相调用，通过共享黑板交换任务
+- **Scene 级并行**：图片/视频/配音按场景并行执行
+- **Planner 拆解**：用户需求自动拆解为任务 DAG
+- **云端 API**：出图/图生视频/配音全部走云端 API，无需本地部署
+- **只配一个 LLM API Key 就能跑通全流程**（其他步骤自动 Mock 降级）
 
 [核心设计](#核心设计) · [架构](#架构) · [项目结构](#项目结构) · [快速开始](#快速开始) · [API](#api) · [配置](#配置)
 
@@ -171,6 +174,24 @@ script → character → storyboard → image → image_to_video → voice → v
 | `generate_storyboard` | LLM (注入) | 分镜生成 |
 
 > **自动降级**：任何 API 没配 Key 时自动使用 Mock，不用改代码。配了 Key 就自动用真实服务。
+
+### 执行引擎
+
+**EventDrivenEngine** — 事件驱动的执行引擎，替代传统的 for 循环 Pipeline：
+
+```
+Planner 创建任务 DAG → Blackboard
+       ↓
+Engine 循环: 就绪任务 → 事件 → Agent 领取执行 → 结果回写
+       ↓
+失败自动回退（Image 失败 → 退回 Storyboard 补 Prompt）
+       ↓
+所有任务完成 → 项目完成
+```
+
+- Agent 之间**不直接调用**，全部通过 EventBus 通信
+- 支持 Scene 级**并行调度**（多个 Image/Voice 任务同时执行）
+- 失败任务自动回退到上游 Agent 修正，而非直接终止
 
 ## 技术栈
 

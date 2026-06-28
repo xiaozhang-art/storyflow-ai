@@ -128,9 +128,9 @@ class PlannerAgent:
     KNOWN_PIPELINES = {
         "comic": ["script", "character", "storyboard", "image", "voice", "video"],
         "novel": ["script", "character", "chapter_outline", "text_generation"],
-        "animation": ["script", "character", "storyboard", "image", "image_to_video", "voice", "video"],
+        "animation": ["script", "character", "storyboard", "image", "voice", "video"],
         "ad": ["script", "storyboard", "image", "voice", "video"],
-        "movie": ["script", "character", "storyboard", "image", "image_to_video", "voice", "video"],
+        "movie": ["script", "character", "storyboard", "image", "voice", "video"],
     }
 
     def __init__(self, event_bus: EventBus | None = None):

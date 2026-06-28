@@ -1,10 +1,10 @@
-"""Video Agent — merge video clips + audio into final MP4.
+"""Video Agent — merge images + audio into final MP4.
 
-Pipeline change: images are already converted to video clips by image_to_video_agent.
-This agent only does:
-  1. Merge each clip's audio track
-  2. Burn subtitles (ASS)
-  3. Concat all clips into final video
+This agent does:
+  1. Create video from still images (ffmpeg -loop 1)
+  2. Merge audio into each clip
+  3. Burn subtitles (ASS)
+  4. Concat all clips into final video
 """
 
 import asyncio

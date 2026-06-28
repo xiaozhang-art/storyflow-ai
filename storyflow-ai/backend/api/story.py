@@ -1,5 +1,6 @@
 """Story API routes."""
 
+import json
 import logging
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
@@ -53,32 +54,50 @@ async def start_generation(story_id: UUID, db: AsyncSession = Depends(get_db)):
 
 @router.get("/{story_id}/world")
 async def get_story_world(story_id: UUID):
-    """获取 StoryWorld 快照 (v3 Runtime)."""
-    from configs.settings import settings
-    from runtime.v3.workspace import Workspace
-    workspace = Workspace(settings.STORAGE_PATH, str(story_id))
-    world_data = workspace.load_world()
-    if not world_data:
-        raise HTTPException(status_code=404, detail="StoryWorld not found (run with USE_RUNTIME_V3=true)")
+    """Get Session state snapshot (Runtime V3)."""
+    from runtime.session_manager import get_session_manager
+    from runtime.artifact_manager import ArtifactManager
+
+    session_mgr = get_session_manager()
+    sessions = session_mgr.get_by_story(str(story_id))
+    if not sessions:
+        raise HTTPException(status_code=404, detail="No session found for this story")
+
+    session = sessions[-1]  # latest session
+    artifact_mgr = ArtifactManager()
+
+    world_data = {
+        "session_id": session.id,
+        "status": session.status.value,
+        "completed_steps": session.completed_steps,
+        "current_step": session.current_step,
+        "artifacts": {},
+    }
+    for step in session.completed_steps:
+        artifact = artifact_mgr.load_json(session.id, step)
+        if artifact:
+            world_data["artifacts"][step] = artifact
+
     return world_data
 
 
 @router.post("/{story_id}/patch")
 async def apply_world_patch(story_id: UUID, patch: dict):
-    """应用用户 Patch 到 StoryWorld.
+    """Apply user Patch to Session state.
 
-    Body: {"character_name": "林晓", "field_path": "appearance.cloth", "new_value": "black armor"}
+    Body: {"character_name": "name", "field_path": "appearance.cloth", "new_value": "black armor"}
     """
-    from configs.settings import settings
-    from runtime.v3.workspace import Workspace
-    from runtime.v3.world.story_world import StoryWorld
+    from runtime.session_manager import get_session_manager
+    from runtime.artifact_manager import ArtifactManager
 
-    workspace = Workspace(settings.STORAGE_PATH, str(story_id))
-    world_data = workspace.load_world()
-    if not world_data:
-        raise HTTPException(status_code=404, detail="StoryWorld not found")
+    session_mgr = get_session_manager()
+    sessions = session_mgr.get_by_story(str(story_id))
+    if not sessions:
+        raise HTTPException(status_code=404, detail="No session found for this story")
 
-    world = StoryWorld.from_dict(world_data)
+    session = sessions[-1]
+    artifact_mgr = ArtifactManager()
+
     name = patch.get("character_name", "")
     field_path = patch.get("field_path", "")
     new_value = patch.get("new_value", "")
@@ -86,24 +105,68 @@ async def apply_world_patch(story_id: UUID, patch: dict):
     if not name or not field_path:
         raise HTTPException(status_code=400, detail="character_name and field_path required")
 
-    event = world.apply_patch(name, field_path, "", new_value)
-    workspace.save_world(world.to_dict())
+    character_data = artifact_mgr.load_json(session.id, "character")
+    if not character_data:
+        raise HTTPException(status_code=404, detail="Character data not found for this session")
 
-    return {"status": "patched", "world_version": world.version, "event": event.description if event else ""}
+    characters = character_data.get("characters", [])
+    patched = False
+    for char in characters:
+        if char.get("name") == name:
+            keys = field_path.split(".")
+            obj = char
+            for key in keys[:-1]:
+                if key in obj:
+                    obj = obj[key]
+                else:
+                    obj[key] = {}
+                    obj = obj[key]
+            obj[keys[-1]] = new_value
+            patched = True
+            break
+
+    if not patched:
+        raise HTTPException(status_code=404, detail=f"Character '{name}' not found")
+
+    artifact_mgr.save_json(session.id, "character", character_data, "characters_patched.json")
+
+    return {"status": "patched", "session_id": session.id, "character": name, "field": field_path}
 
 
 @router.get("/{story_id}/checkpoints")
 async def list_checkpoints(story_id: UUID):
-    """列出项目的所有 Checkpoint (v3 Runtime)."""
-    from configs.settings import settings
-    from runtime.v3.workspace import Workspace
-    workspace = Workspace(settings.STORAGE_PATH, str(story_id))
-    return {"checkpoints": workspace.list_checkpoints()}
+    """List all Checkpoints for a Session (Runtime V3)."""
+    from runtime.session_manager import get_session_manager
+    from runtime.artifact_manager import ArtifactManager
+
+    session_mgr = get_session_manager()
+    sessions = session_mgr.get_by_story(str(story_id))
+    if not sessions:
+        raise HTTPException(status_code=404, detail="No session found for this story")
+
+    session = sessions[-1]
+    artifact_mgr = ArtifactManager()
+
+    checkpoint_dir = artifact_mgr.get_session_dir(session.id) / "_checkpoints"
+    checkpoints = []
+    if checkpoint_dir.exists():
+        for cp_file in sorted(checkpoint_dir.glob("*.json")):
+            try:
+                data = json.loads(cp_file.read_text())
+                checkpoints.append({
+                    "file": cp_file.name,
+                    "step": data.get("step", "unknown"),
+                    "timestamp": data.get("timestamp", ""),
+                })
+            except Exception:
+                checkpoints.append({"file": cp_file.name, "error": "unreadable"})
+
+    return {"session_id": session.id, "checkpoints": checkpoints}
 
 
 @router.post("/{story_id}/resume")
 async def resume_generation(story_id: UUID, db: AsyncSession = Depends(get_db)):
-    """从最近的 Checkpoint 恢复生成 (v3 Runtime)."""
+    """Resume generation from latest checkpoint (Runtime V3)."""
     story = await story_service.get_story(db, story_id)
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")

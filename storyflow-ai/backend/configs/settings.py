@@ -1,6 +1,6 @@
 """StoryFlow AI — Configuration.
 
-All external services use cloud APIs (no local ComfyUI / CosyVoice needed).
+All external services use cloud APIs (no local GPU needed).
 Only LLM is strictly required; image / video / voice can run in mock mode.
 """
 
@@ -47,12 +47,12 @@ class Settings(BaseSettings):
     I2V_POLL_INTERVAL: int = 5
     I2V_POLL_TIMEOUT: int = 300
 
-    # ── TTS / Voice API (e.g. CosyVoice Cloud / DashScope TTS / Azure) ──
-    # Provider: "dashscope_tts", "cosyvoice_cloud", "azure", "mock"
+    # ── TTS / Voice API (e.g. DashScope TTS / Azure) ──
+    # Provider: "dashscope_tts", "azure", "mock"
     VOICE_API_PROVIDER: str = "dashscope_tts"
     VOICE_API_KEY: str = ""
     VOICE_API_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1"
-    VOICE_MODEL: str = "cosyvoice-v1"
+    VOICE_MODEL: str = "cosyvoice-v1-25hz"
     VOICE_SAMPLE_RATE: int = 22050
 
     # ── Storage ──

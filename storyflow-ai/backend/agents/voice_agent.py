@@ -1,6 +1,6 @@
 """Voice Agent — generate speech via cloud TTS API (DashScope TTS / Mock).
 
-All cloud APIs, no local CosyVoice deployment required.
+All cloud APIs, no local deployment required.
 """
 
 import asyncio
@@ -117,10 +117,10 @@ def _make_audio_entry(story_id: str, scene_no: int, audio_path: str,
     }
 
 
-# ── DashScope TTS (CosyVoice Cloud) ──
+# ── DashScope TTS (Cloud) ──
 
 async def _dashscope_tts(text: str, speaker: str, output_path: str):
-    """Generate speech via DashScope CosyVoice TTS API (async task + poll)."""
+    """Generate speech via DashScope TTS API (async task + poll)."""
     api_key = settings.VOICE_API_KEY
     base_url = settings.VOICE_API_BASE_URL
     model = settings.VOICE_MODEL

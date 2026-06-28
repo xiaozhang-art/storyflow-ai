@@ -2,7 +2,7 @@
 
 # 🎬 StoryFlow AI
 
-**基于 StoryFlow Runtime V3 的 AI 漫剧自动生成平台**
+**基于 StoryFlow Runtime V3.5 的 AI 漫剧自动生成平台**
 
 用户输入一段创意，系统通过 7 个 AI Agent 协作，自动完成
 **剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 图生视频 → 配音合成 → 视频导出**，
@@ -34,16 +34,19 @@
                           ▼
               ┌───────────────────────┐
               │   StoryFlow Runtime    │
-              │       (V3 核心)       │
+              │      (V3.5 核心)      │
               │  WorkflowEngine       │
+              │  RetryEngine          │
+              │  MemoryRuntime        │
+              │  TraceRuntime         │
+              │  QualityEngine        │
+              │  DirectorAgent        │
+              │  PlannerAgent         │
               │  EventBus             │
               │  Blackboard           │
               │  ArtifactManager      │
               │  SessionManager       │
               │  HookFramework        │
-              │  DirectorAgent        │
-              │  PlannerAgent         │
-              │  QualityEngine        │
               │  AdapterRegistry      │
               │  Agent SDK            │
               └───────────┬───────────┘
@@ -67,20 +70,20 @@
 | 能力 | 实现 | 说明 |
 |------|------|------|
 | **编排** | WorkflowEngine + YAML DSL | 支持线性/并行/DAG 执行 |
-| **通信** | EventBus (pub/sub) | 13 种事件类型，组件完全解耦 |
+| **策略重试** | RetryEngine | 6 种策略：超时/限流/API错误/质量失败/认证/内容安全 |
+| **四层记忆** | MemoryRuntime | Session/Character/World/Timeline，自动注入 Agent Prompt |
+| **全链路追踪** | TraceRuntime | OpenTelemetry 风格 Span，Token/Cost/Duration 统计 |
+| **质量门禁** | QualityEngine | 6 种 Checker：Script/Character/Storyboard/Image/Voice/Consistency |
+| **决策** | DirectorAgent | 观察-思考-决策（不生成内容），集成 RetryEngine |
+| **规划** | PlannerAgent | 需求拆解为可执行任务 DAG |
+| **通信** | EventBus (pub/sub) | 16 种事件类型，组件完全解耦 |
 | **共享状态** | Blackboard | 点号路径读写 + 变更通知 |
 | **中间产物** | ArtifactManager | 文件化存储，支持局部重生成 |
 | **会话管理** | SessionManager | 从任意步骤恢复/重跑 |
-| **质量门禁** | QualityEngine | 6 种 Checker 自动质检 |
-| **决策** | DirectorAgent | 观察-思考-决策（不生成内容） |
-| **规划** | PlannerAgent | 需求拆解为可执行任务 DAG |
 | **Hook** | HookFramework | Before/After/Error 横切关注点 |
 | **模型切换** | AdapterRegistry | 改配置换模型，Agent 代码不动 |
 | **扩展 Agent** | Agent SDK | 继承 BaseAgent，一行注册 |
 | **Workflow** | YAML DSL | 声明式定义，支持并行组 |
-| **策略重试** | RetryEngine | 策略化重试：超时/限流/降级/模型切换 |
-| **四层记忆** | MemoryRuntime | Session/Character/World/Timeline 共享记忆 |
-| **全链路追踪** | TraceRuntime | Span/Token/Cost/Duration 可视化 |
 
 > **核心原则：Agent 只接收输入、返回输出，禁止互相调用。Runtime 拥有唯一调度权。**
 
@@ -104,14 +107,14 @@
                                  │
                     ┌────────────▼───────────────┐
                     │      RetryEngine         │
-                    │  策略化重试 / 降级 / 切换  │
+                    │  6 策略 / 5 动作 / 退避抖动│
                     └────────────┬───────────────┘
                                  │
         ┌────────────────────┼────────────────────────┐
         │                        │                        │
         ▼                        ▼                        ▼
  Planner Agent           Blackboard               QualityEngine
- (动态 DAG)            (共享状态)               (质量闭环+Suggestion)
+ (动态 DAG)            (共享状态)       (6 Checker + Suggestion)
         │                        │                        │
         ▼                        ▼                        ▼
     ┌───────┐              ┌──────────┐           ┌──────────┐
@@ -163,13 +166,18 @@ blackboard.set("scenes.0.image_url", "/storage/scene_001.png")
 **5. 策略化重试（RetryEngine）**
 ```python
 # Agent 永远不要自己 retry —— Runtime retry
-# 内置 7 种策略：timeout / rate_limit / api_error / quality_fail / auth / content_filter / default
-# 每种策略定义：max_retries, backoff, actions
-# Actions: RETRY_SAME → MODIFY_PROMPT → SWITCH_MODEL → FALLBACK → ABORT
+# 内置 6 种策略：timeout / rate_limit / api_error / quality_fail / auth / content_filter
+# + 1 个兜底策略：_default
+# 每种策略定义：max_retries, backoff_base, backoff_max, jitter, actions
+# 5 种动作：RETRY_SAME → MODIFY_PROMPT → SWITCH_MODEL → FALLBACK → ABORT
+# Actions 列表语义：前面的是逐次重试策略，最后一个是终极动作（terminal）
 retry_engine.register_policy(RetryPolicy(
     name="image_api", max_retries=3,
     actions=[RetryAction.RETRY_SAME, RetryAction.FALLBACK],
 ))
+# RetryEngine 自动根据异常信息分类到对应策略，无需手动指定
+# 支持 Director 联动：重试时咨询 Director 是否 ABORT
+# 统计：total_retries / successes_after_retry / fallbacks / aborts / policy_usage
 ```
 
 **6. 四层记忆（MemoryRuntime）**
@@ -180,21 +188,30 @@ memory.character.upsert_character("林晓", {
 })
 memory.world.set("era", "ancient China")
 
-# Image Agent 自动获得角色外观描述
-ctx = memory.build_context("image")  # → 包含 [Character Appearances] 块
+# 不同 Agent 获得不同的记忆切片
+ctx = memory.build_context("image")  # → [Character Appearances]
+ctx = memory.build_context("voice")  # → [Voice Mapping] (性别→音色)
+ctx = memory.build_context("storyboard")  # → [Characters] + [World] + [Timeline]
+
+# 自动从管线状态同步：populate_from_state() 在每步后调用
 ```
 
 **7. 全链路追踪（TraceRuntime）**
 ```
-ScriptAgent    2.3s  1200 tokens
-  ↓
-Storyboard    5.6s  2800 tokens
-  ↓
-Image        32s   (7 API calls)
-  ↓
-Voice        12s   (7 API calls)
-  ↓
-Video        180s  → Total: $2.35
+# OpenTelemetry 风格的 Span 树
+pipeline (root)
+  ├─ script      2.3s  1200 tokens  $0.003
+  ├─ character   1.8s   800 tokens  $0.002
+  ├─ storyboard 5.6s  2800 tokens  $0.007
+  ├─ image      32.0s      0 tokens  $0.210  (7 API calls)
+  ├─ image_to_video 45s  0 tokens  $0.350  (7 API calls)
+  ├─ voice      12.0s      0 tokens  $0.014  (7 API calls)
+  └─ video     180.0s      0 tokens  $0.000  (FFmpeg)
+                                          ────────
+                               Total: 278.7s  $0.586
+
+# API: trace.get_trace_summary(session_id) → JSON for frontend
+# 每步记录：span_id, parent_id, duration_ms, status, retry_count, cost
 ```
 
 **8. 模型热切换（Adapter）**
@@ -212,7 +229,7 @@ class MusicAgent(BaseAgent):
 agent_registry.register(MusicAgent())  # Runtime 自动发现
 ```
 
-**7. Workflow DSL（声明式）**
+**10. Workflow DSL（声明式）**
 ```yaml
 steps:
   - id: image
@@ -273,7 +290,7 @@ storyflow-ai/
 │   │
 │   └── runtime/                       # ★ Runtime 核心 (V3.5)
 │       ├── core.py                    # StoryFlowRuntime 主入口
-│       ├── event_bus.py               # EventBus (13 种事件)
+│       ├── event_bus.py               # EventBus (16 种事件)
 │       ├── blackboard.py              # Blackboard (点号路径)
 │       ├── artifact_manager.py        # ArtifactManager (Checkpoint)
 │       ├── session_manager.py         # SessionManager (部分重生成)
@@ -282,17 +299,17 @@ storyflow-ai/
 │       ├── director.py                # DirectorAgent (决策)
 │       ├── planner.py                 # PlannerAgent (任务 DAG)
 │       ├── agent_sdk.py               # BaseAgent + AgentRegistry
-│       ├── retry_engine.py            # ★ RetryEngine (策略化重试)
+│       ├── retry_engine.py            # ★ RetryEngine (6 策略 + 5 动作)
 │       ├── memory/                    # ★ MemoryRuntime (四层记忆)
-│       │   ├── __init__.py            # MemoryRuntime 门面
+│       │   ├── __init__.py            # MemoryRuntime 门面 + build_context()
 │       │   ├── base.py                # BaseMemory 抽象基类
 │       │   ├── session_memory.py      # SessionMemory (执行上下文)
-│       │   ├── character_memory.py    # CharacterMemory (角色数据)
-│       │   ├── world_memory.py        # WorldMemory (世界观)
+│       │   ├── character_memory.py    # CharacterMemory (角色数据 + 外观 Prompt)
+│       │   ├── world_memory.py        # WorldMemory (世界观设置)
 │       │   └── timeline_memory.py     # TimelineMemory (事件历史)
 │       ├── trace/                     # ★ TraceRuntime (全链路追踪)
 │       │   └── __init__.py            # Span / TraceTree / TraceRuntime
-│       ├── quality/                   # QualityEngine (6 种 Checker)
+│       ├── quality/                   # QualityEngine (6 种 Checker + Suggestion)
 │       └── adapters/                  # 5 类 Adapter (纯云端 API)
 │           └── __init__.py
 │

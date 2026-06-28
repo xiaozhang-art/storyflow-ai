@@ -1,10 +1,7 @@
-"""Video Agent — merge images + audio into final MP4.
+"""Video Agent — merge video clips + audio into final MP4.
 
-This agent does:
-  1. Create video from still images (ffmpeg -loop 1)
-  2. Merge audio into each clip
-  3. Burn subtitles (ASS)
-  4. Concat all clips into final video
+Receives video clips from image_to_video_agent, merges audio, burns subtitles,
+and concatenates into the final story.mp4.
 """
 
 import asyncio
@@ -73,8 +70,8 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 
 
 async def _merge_audio_to_clip(video_path: str, audio_path: str | None,
-                              output_path: str, duration: float) -> bool:
-    """Merge audio into a video clip (replace or add audio track)."""
+                              output_path: str) -> bool:
+    """Merge audio into a video clip."""
     cmd = ["ffmpeg", "-y", "-i", video_path]
     if audio_path and Path(audio_path).exists():
         cmd.extend(["-i", audio_path, "-c:v", "copy", "-c:a", "aac",
@@ -93,100 +90,21 @@ async def _merge_audio_to_clip(video_path: str, audio_path: str | None,
         return False
 
 
-async def video_agent(state: dict, context: dict) -> dict:
-    """Video assembly agent.
-
-    v3 signature: (state, context) -> dict partial update.
-    Merges video clips + audio into final MP4 with subtitles.
-    """
-    story_id = state.get("story_id", "unknown")
-    storyboard = state.get("storyboard", [])
-    video_clips = state.get("video_clips", [])
-    audios = state.get("audios", [])
-    use_capability = context.get("use_capability")
-
-    logger.info("video_agent started | story_id=%s, %d clips", story_id, len(video_clips))
-
-    if not video_clips:
-        # Legacy fallback: no i2v step, use images directly
-        return await _legacy_video_assembly(state, context)
-
-    story_dir = Path(settings.STORAGE_PATH) / "stories" / story_id
-    merged_dir = story_dir / "merged"
-    merged_dir.mkdir(parents=True, exist_ok=True)
-    final_dir = story_dir / "video"
-    final_dir.mkdir(parents=True, exist_ok=True)
-
-    clip_map = {c["scene_no"]: c for c in video_clips}
-    audio_map = {a["scene_no"]: a for a in audios}
-
-    # Step 1: Merge audio into each clip
-    merged_clips: list[dict] = []
-    clip_durations: dict[int, float] = {}
-
-    for clip in video_clips:
-        scene_no = clip.get("scene_no", 0)
-        video_path = clip.get("video_path", "")
-        audio_path = audio_map[scene_no]["audio_path"] if scene_no in audio_map else None
-
-        if not video_path or not Path(video_path).exists():
-            continue
-
-        merged_path = str(merged_dir / f"scene_{scene_no:03d}.mp4")
-        if video_path != merged_path:
-            success = await _merge_audio_to_clip(video_path, audio_path, merged_path,
-                                                  clip.get("duration", 5))
-        else:
-            success = True
-
-        if success or Path(video_path).exists():
-            final_clip = merged_path if Path(merged_path).exists() else video_path
-            clip_durations[scene_no] = _get_media_duration(final_clip)
-            merged_clips.append({
-                "scene_no": scene_no,
-                "video_path": final_clip,
-                "audio_path": audio_path,
-            })
-
-    if not merged_clips:
-        return {"video_path": "", "status": "error", "error": "No valid clips to merge."}
-
-    # Step 2: Generate ASS subtitles
-    ass_path = merged_dir / "subtitles.ass"
-    _write_ass_file(storyboard, clip_durations, ass_path)
-
-    # Step 3: Merge via Capability or direct FFmpeg
-    final_path = str(final_dir / "story.mp4")
-
-    if use_capability:
-        result = await use_capability("merge_video", {
-            "clips": merged_clips,
-            "output_path": final_path,
-            "subtitle_path": str(ass_path),
-        }, context)
-
-        if result.get("success"):
-            video_url = f"/storage/stories/{story_id}/video/story.mp4"
-            logger.info("video_agent completed via capability | %s", final_path)
-            return {"video_path": final_path, "video_url": video_url,
-                    "status": "video_done", "error": ""}
-
-    # Fallback: direct concat
-    success = await _direct_concat(merged_clips, final_path)
-    if not success and ass_path.exists():
-        # Try without subtitles
-        success = await _direct_concat(merged_clips, final_path)
-
-    video_url = f"/storage/stories/{story_id}/video/story.mp4"
-    status = "video_done" if success else "error"
-    error = "" if success else "Final concat failed"
-
-    logger.info("video_agent completed | success=%s | %s", success, final_path)
-    return {"video_path": final_path, "video_url": video_url, "status": status, "error": error}
+async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> bool:
+    """Burn ASS subtitles into a video."""
+    cmd = ["ffmpeg", "-y", "-i", input_path, "-vf", f"ass={ass_path}",
+           "-c:a", "copy", str(output_path)]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        _, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        return proc.returncode == 0 and Path(output_path).exists()
+    except Exception:
+        return False
 
 
 async def _direct_concat(clips: list[dict], output_path: str) -> bool:
-    """Direct FFmpeg concat without capability."""
+    """Concat video clips via FFmpeg concat demuxer."""
     filelist = Path(output_path).parent / "_concat.txt"
     with open(filelist, "w") as f:
         for c in clips:
@@ -211,13 +129,107 @@ async def _direct_concat(clips: list[dict], output_path: str) -> bool:
             pass
 
 
-async def _legacy_video_assembly(state: dict, context: dict) -> dict:
-    """Legacy path: images + audio -> video (when no i2v step)."""
+async def video_agent(state: dict, context: dict) -> dict:
+    """Video assembly agent.
+
+    Merges video clips + audio into final MP4 with subtitles.
+    If video_clips exist (from image_to_video_agent), uses them directly.
+    Otherwise falls back to static image → video via FFmpeg.
+    """
+    story_id = state.get("story_id", "unknown")
+    storyboard = state.get("storyboard", [])
+    video_clips = state.get("video_clips", [])
+    images = state.get("images", [])
+    audios = state.get("audios", [])
+
+    logger.info("video_agent started | story_id=%s, %d clips, %d images",
+                story_id, len(video_clips), len(images))
+
+    if video_clips:
+        return await _assemble_from_clips(state, context)
+    elif images:
+        return await _legacy_assembly(state, context)
+    else:
+        return {"video_path": "", "status": "error", "error": "No video clips or images."}
+
+
+async def _assemble_from_clips(state: dict, context: dict) -> dict:
+    """Assemble final video from pre-generated video clips."""
+    story_id = state.get("story_id", "unknown")
+    storyboard = state.get("storyboard", [])
+    video_clips = state.get("video_clips", [])
+    audios = state.get("audios", [])
+
+    story_dir = Path(settings.STORAGE_PATH) / "stories" / story_id
+    merged_dir = story_dir / "merged"
+    merged_dir.mkdir(parents=True, exist_ok=True)
+    final_dir = story_dir / "video"
+    final_dir.mkdir(parents=True, exist_ok=True)
+
+    audio_map = {a["scene_no"]: a for a in audios}
+
+    # Step 1: Merge audio into each clip
+    merged_clips: list[dict] = []
+    clip_durations: dict[int, float] = {}
+
+    for clip in video_clips:
+        scene_no = clip.get("scene_no", 0)
+        video_path = clip.get("video_path", "")
+        audio_path = audio_map[scene_no]["audio_path"] if scene_no in audio_map else None
+
+        if not video_path or not Path(video_path).exists():
+            continue
+
+        merged_path = str(merged_dir / f"scene_{scene_no:03d}.mp4")
+        await _merge_audio_to_clip(video_path, audio_path, merged_path)
+
+        final_clip = merged_path if Path(merged_path).exists() else video_path
+        clip_durations[scene_no] = _get_media_duration(final_clip)
+        merged_clips.append({
+            "scene_no": scene_no,
+            "video_path": final_clip,
+        })
+
+    if not merged_clips:
+        return {"video_path": "", "status": "error", "error": "No valid clips to merge."}
+
+    # Step 2: Generate ASS subtitles
+    ass_path = merged_dir / "subtitles.ass"
+    _write_ass_file(storyboard, clip_durations, ass_path)
+
+    # Step 3: Burn subtitles into each clip
+    subtitled_dir = story_dir / "subtitled"
+    subtitled_dir.mkdir(parents=True, exist_ok=True)
+    subtitled_clips: list[dict] = []
+
+    for clip in merged_clips:
+        out = str(subtitled_dir / f"scene_{clip['scene_no']:03d}.mp4")
+        if ass_path.exists():
+            ok = await _burn_subtitles(clip["video_path"], str(ass_path), out)
+            subtitled_clips.append({"scene_no": clip["scene_no"],
+                                    "video_path": out if ok else clip["video_path"]})
+        else:
+            subtitled_clips.append(clip)
+
+    # Step 4: Concat all clips
+    final_path = str(final_dir / "story.mp4")
+    success = await _direct_concat(subtitled_clips, final_path)
+
+    video_url = f"/storage/stories/{story_id}/video/story.mp4"
+    status = "video_done" if success else "error"
+    error = "" if success else "Final concat failed"
+
+    logger.info("video_agent completed | success=%s | %s", success, final_path)
+    return {"video_path": final_path, "video_url": video_url, "status": status, "error": error}
+
+
+async def _legacy_assembly(state: dict, context: dict) -> dict:
+    """Legacy: images + audio → video (when no image_to_video step)."""
     images = state.get("images", [])
     storyboard = state.get("storyboard", [])
     story_id = state.get("story_id", "unknown")
 
-    logger.info("video_agent: legacy mode (no video_clips) | story_id=%s", story_id)
+    logger.info("video_agent: legacy mode (static images) | story_id=%s", story_id)
 
     story_dir = Path(settings.STORAGE_PATH) / "stories" / story_id
     scenes_dir = story_dir / "scenes"
@@ -241,7 +253,6 @@ async def _legacy_video_assembly(state: dict, context: dict) -> dict:
         scene_video_path = scenes_dir / f"scene_{scene_no}.mp4"
         duration = scene.get("duration", 5)
 
-        # Image -> video via ffmpeg
         cmd = ["ffmpeg", "-y", "-loop", "1", "-i", img_info.get("image_path", "")]
         if audio_path and Path(audio_path).exists():
             cmd.extend(["-i", audio_path, "-shortest", "-c:a", "aac", "-b:a", "128k"])
@@ -276,13 +287,10 @@ async def _legacy_video_assembly(state: dict, context: dict) -> dict:
 
     for sv in scene_videos:
         out = subtitled_dir / sv.name
-        cmd = ["ffmpeg", "-y", "-i", str(sv), "-vf", f"ass={ass_path}", "-c:a", "copy", str(out)]
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            _, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-            subtitled_videos.append(out if out.exists() else sv)
-        except Exception:
+        if ass_path.exists():
+            ok = await _burn_subtitles(str(sv), str(ass_path), str(out))
+            subtitled_videos.append(Path(out) if ok else sv)
+        else:
             subtitled_videos.append(sv)
 
     # Concat
@@ -298,7 +306,6 @@ async def _legacy_video_assembly(state: dict, context: dict) -> dict:
             "-i", str(filelist_path), "-c", "copy", str(final_path),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-
         if proc.returncode != 0:
             logger.error("Legacy concat failed: %s", stderr.decode()[:300])
     except asyncio.TimeoutError:

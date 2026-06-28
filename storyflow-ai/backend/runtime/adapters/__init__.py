@@ -1,15 +1,14 @@
-"""Model Adapters - Pluggable model backends.
+"""Model Adapters - Pluggable cloud API backends.
 
-Switch models by changing configuration, without modifying any Agent code.
+All adapters use cloud APIs — no local GPU required.
+Switch providers by changing IMAGE_API_PROVIDER / VOICE_API_PROVIDER / I2V_API_PROVIDER.
 
 Architecture:
-    ImageAdapter → ComfyUI | DashScope | Mock
-    VoiceAdapter → CosyVoice | DashScope TTS | Mock
-    VideoAdapter → FFmpeg | Kling | Mock
-    LLMAdapter   → OpenAI | DeepSeek | Qwen | Mock
-
-Each adapter implements a common interface. The Runtime selects
-the adapter based on configuration.
+    ImageAdapter → DashScope (通义万相) | OpenAI DALL-E | Mock
+    VoiceAdapter → DashScope TTS | Mock
+    I2VAdapter   → Kling | Runway | Mock (FFmpeg)
+    VideoAdapter → FFmpeg (local concat)
+    LLMAdapter   → OpenAI | DeepSeek | Qwen
 """
 
 import logging
@@ -40,19 +39,14 @@ class LLMAdapter(BaseAdapter):
     name = "llm"
 
     async def generate(self, **kwargs) -> str:
-        """Call the LLM with given prompt and return response text."""
         from app.llm import get_creative_llm, get_precise_llm
         from langchain_core.messages import HumanMessage, SystemMessage
 
         prompt = kwargs.get("prompt", "")
         system = kwargs.get("system", "")
         temperature = kwargs.get("temperature", 0.7)
-        max_tokens = kwargs.get("max_tokens", 4096)
 
-        if temperature >= 0.7:
-            llm = get_creative_llm()
-        else:
-            llm = get_precise_llm()
+        llm = get_creative_llm() if temperature >= 0.7 else get_precise_llm()
 
         messages = []
         if system:
@@ -63,21 +57,15 @@ class LLMAdapter(BaseAdapter):
         return response.content
 
     async def generate_structured(self, **kwargs) -> Any:
-        """Call the LLM and parse structured output."""
         from app.llm import get_creative_llm, get_precise_llm
+        from langchain_core.messages import HumanMessage, SystemMessage
 
         prompt = kwargs.get("prompt", "")
         system = kwargs.get("system", "")
         output_parser = kwargs.get("output_parser")
         temperature = kwargs.get("temperature", 0.7)
 
-        if temperature >= 0.7:
-            llm = get_creative_llm()
-        else:
-            llm = get_precise_llm()
-
-        from langchain_core.prompts import ChatPromptTemplate
-        from langchain_core.messages import HumanMessage, SystemMessage
+        llm = get_creative_llm() if temperature >= 0.7 else get_precise_llm()
 
         messages = []
         if system:
@@ -93,49 +81,32 @@ class LLMAdapter(BaseAdapter):
 
 
 class ImageAdapter(BaseAdapter):
-    """Adapter for image generation.
-
-    V3: Pluggable backends (ComfyUI, DashScope, Mock, etc.)
-    """
+    """Adapter for cloud image generation (DashScope / OpenAI / Mock)."""
 
     name = "image"
 
     def __init__(self):
         from configs.settings import settings
-        self._provider = getattr(settings, "IMAGE_API_PROVIDER", "comfyui")
+        self._provider = getattr(settings, "IMAGE_API_PROVIDER", "dashscope")
 
     async def generate(self, **kwargs) -> dict:
-        """Generate an image.
-
-        Args:
-            prompt: Image generation prompt
-            scene_no: Scene number
-            seed: Random seed
-
-        Returns:
-            Dict with image_url and metadata
-        """
         if self._provider == "mock":
             return self._mock_generate(**kwargs)
-        elif self._provider == "comfyui":
-            return await self._comfyui_generate(**kwargs)
         else:
-            logger.warning("Unknown image provider: %s, using mock", self._provider)
-            return self._mock_generate(**kwargs)
-
-    async def _comfyui_generate(self, **kwargs) -> dict:
-        """Generate via ComfyUI (existing implementation)."""
-        from agents.image_agent import _generate_single_image
-        state = {
-            "storyboard": [{"scene_no": kwargs.get("scene_no", 1),
-                           "prompt": kwargs.get("prompt", "")}],
-            "story_id": kwargs.get("story_id", ""),
-        }
-        results = await _generate_single_image(state, kwargs.get("scene_no", 0))
-        return results if isinstance(results, dict) else {}
+            # Delegate to the image_agent which handles all providers
+            from agents.image_agent import image_agent
+            state = {
+                "storyboard": [{"scene_no": kwargs.get("scene_no", 1),
+                                "prompt": kwargs.get("prompt", "")}],
+                "story_id": kwargs.get("story_id", ""),
+            }
+            result = await image_agent(state, {})
+            images = result.get("images", [])
+            if images:
+                return images[0]
+            return {"scene_no": kwargs.get("scene_no", 1), "image_url": "", "image_path": ""}
 
     def _mock_generate(self, **kwargs) -> dict:
-        """Generate a placeholder (for testing without GPU)."""
         return {
             "scene_no": kwargs.get("scene_no", 1),
             "image_url": "",
@@ -143,59 +114,33 @@ class ImageAdapter(BaseAdapter):
             "provider": "mock",
         }
 
-    async def health_check(self) -> bool:
-        if self._provider == "mock":
-            return True
-        try:
-            from configs.settings import settings
-            import httpx
-            url = settings.COMFYUI_URL
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(f"{url}/system_stats")
-                return resp.status_code == 200
-        except Exception:
-            return False
-
 
 class VoiceAdapter(BaseAdapter):
-    """Adapter for voice/TTS generation.
-
-    V3: Pluggable backends (CosyVoice, DashScope TTS, Mock, etc.)
-    """
+    """Adapter for cloud TTS (DashScope TTS / Mock)."""
 
     name = "voice"
 
     def __init__(self):
         from configs.settings import settings
-        self._provider = getattr(settings, "VOICE_API_PROVIDER", "cosyvoice")
+        self._provider = getattr(settings, "VOICE_API_PROVIDER", "dashscope_tts")
 
     async def generate(self, **kwargs) -> dict:
-        """Generate voice audio.
-
-        Args:
-            text: Text to speak
-            speaker: Speaker type (male/female)
-            scene_no: Scene number
-
-        Returns:
-            Dict with audio_url and metadata
-        """
         if self._provider == "mock":
             return self._mock_generate(**kwargs)
-        elif self._provider == "cosyvoice":
-            return await self._cosyvoice_generate(**kwargs)
         else:
-            return self._mock_generate(**kwargs)
-
-    async def _cosyvoice_generate(self, **kwargs) -> dict:
-        """Generate via CosyVoice (existing implementation)."""
-        from agents.voice_agent import _generate_voice_for_scene
-        result = await _generate_voice_for_scene(
-            scene_no=kwargs.get("scene_no", 1),
-            dialogue=kwargs.get("text", ""),
-            characters=kwargs.get("characters", []),
-        )
-        return result if isinstance(result, dict) else {}
+            from agents.voice_agent import voice_agent
+            state = {
+                "storyboard": [{"scene_no": kwargs.get("scene_no", 1),
+                                "dialogue": kwargs.get("text", ""),
+                                "characters": []}],
+                "characters": kwargs.get("characters", []),
+                "story_id": kwargs.get("story_id", ""),
+            }
+            result = await voice_agent(state, {})
+            audios = result.get("audios", [])
+            if audios:
+                return audios[0]
+            return {"scene_no": kwargs.get("scene_no", 1), "audio_url": "", "audio_path": ""}
 
     def _mock_generate(self, **kwargs) -> dict:
         return {
@@ -206,86 +151,84 @@ class VoiceAdapter(BaseAdapter):
         }
 
 
-class VideoAdapter(BaseAdapter):
-    """Adapter for video generation/compositing.
+class I2VAdapter(BaseAdapter):
+    """Adapter for cloud image-to-video (Kling / Runway / Mock)."""
 
-    V3: Pluggable backends (FFmpeg, Kling, Mock, etc.)
-    """
-
-    name = "video"
+    name = "image_to_video"
 
     def __init__(self):
         from configs.settings import settings
-        self._provider = getattr(settings, "VIDEO_API_PROVIDER", "ffmpeg")
+        self._provider = getattr(settings, "I2V_API_PROVIDER", "kling")
 
     async def generate(self, **kwargs) -> dict:
-        """Generate or composite video.
-
-        Args:
-            images: List of image paths
-            audios: List of audio paths
-            story_id: Story ID for storage path
-
-        Returns:
-            Dict with video_url
-        """
         if self._provider == "mock":
             return self._mock_generate(**kwargs)
-        elif self._provider == "ffmpeg":
-            return await self._ffmpeg_generate(**kwargs)
         else:
-            return self._mock_generate(**kwargs)
-
-    async def _ffmpeg_generate(self, **kwargs) -> dict:
-        """Generate via FFmpeg (existing implementation)."""
-        from agents.video_agent import video_agent
-        state = kwargs.get("state", {})
-        result = await video_agent(state)
-        return result if isinstance(result, dict) else {}
+            from agents.image_to_video_agent import image_to_video_agent
+            state = {
+                "images": [{"scene_no": kwargs.get("scene_no", 1),
+                            "image_path": kwargs.get("image_path", "")}],
+                "story_id": kwargs.get("story_id", ""),
+            }
+            result = await image_to_video_agent(state, {})
+            clips = result.get("video_clips", [])
+            if clips:
+                return clips[0]
+            return {"scene_no": kwargs.get("scene_no", 1), "video_url": "", "video_path": ""}
 
     def _mock_generate(self, **kwargs) -> dict:
         return {
-            "video_path": "",
+            "scene_no": kwargs.get("scene_no", 1),
             "video_url": "",
+            "video_path": "",
             "provider": "mock",
         }
 
 
-class AdapterRegistry:
-    """Registry for all model adapters.
+class VideoAdapter(BaseAdapter):
+    """Adapter for video compositing (FFmpeg concat, always local)."""
 
-    Provides a single point to get any adapter by type.
-    """
+    name = "video"
+
+    async def generate(self, **kwargs) -> dict:
+        from agents.video_agent import video_agent
+        state = kwargs.get("state", {})
+        result = await video_agent(state, {})
+        return result if isinstance(result, dict) else {}
+
+    async def health_check(self) -> bool:
+        import shutil
+        return shutil.which("ffmpeg") is not None
+
+
+class AdapterRegistry:
+    """Registry for all model adapters."""
 
     def __init__(self):
         self._adapters: dict[str, BaseAdapter] = {}
         self._register_defaults()
 
     def _register_defaults(self):
-        """Register default adapters."""
         self._adapters["llm"] = LLMAdapter()
         self._adapters["image"] = ImageAdapter()
         self._adapters["voice"] = VoiceAdapter()
+        self._adapters["image_to_video"] = I2VAdapter()
         self._adapters["video"] = VideoAdapter()
 
     def get(self, adapter_type: str) -> BaseAdapter:
-        """Get an adapter by type."""
         adapter = self._adapters.get(adapter_type)
         if not adapter:
             raise ValueError(f"Unknown adapter type: {adapter_type}")
         return adapter
 
     def register(self, adapter_type: str, adapter: BaseAdapter):
-        """Register a custom adapter."""
         self._adapters[adapter_type] = adapter
         logger.info("Registered adapter: %s → %s", adapter_type, adapter.name)
 
     def list_adapters(self) -> dict[str, str]:
-        """List all registered adapters and their backend names."""
         return {k: v.name for k, v in self._adapters.items()}
 
     async def health_check_all(self) -> dict[str, bool]:
-        """Check health of all adapters."""
         results = {}
         for name, adapter in self._adapters.items():
             try:

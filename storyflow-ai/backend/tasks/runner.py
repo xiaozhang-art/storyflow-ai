@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 STEP_PROGRESS = {
     "init": 0,
     "script": 10,
-    "character": 25,
-    "storyboard": 40,
-    "image": 65,
+    "character": 20,
+    "storyboard": 30,
+    "image": 50,
+    "image_to_video": 65,
     "voice": 80,
     "video": 95,
     "done": 100,
@@ -31,8 +32,9 @@ STEP_MESSAGE = {
     "character": "正在设计角色形象...",
     "storyboard": "正在生成分镜...",
     "image": "正在生成图片 ({current}/{total})...",
+    "image_to_video": "正在生成视频片段 ({current}/{total})...",
     "voice": "正在生成配音 ({current}/{total})...",
-    "video": "正在合成视频...",
+    "video": "正在合成最终视频...",
     "done": "漫剧生成完成！",
 }
 
@@ -43,6 +45,7 @@ STEP_STORY_STATUS = {
     "character": "character_done",
     "storyboard": "storyboard_done",
     "image": "image_done",
+    "image_to_video": "image_done",
     "voice": "voice_done",
     "video": "completed",
 }

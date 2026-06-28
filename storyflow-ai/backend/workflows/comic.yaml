@@ -1,10 +1,9 @@
 # StoryFlow Workflow DSL
-# Defines the pipeline as a declarative YAML file.
-# The Runtime executes this automatically.
+# 7-step comic drama pipeline with image-to-video.
 
 name: comic_drama
-description: "Standard comic drama generation pipeline"
-version: "1.0"
+description: "Comic drama generation pipeline with image-to-video"
+version: "2.0"
 
 steps:
   - id: script
@@ -42,32 +41,42 @@ steps:
   - id: image
     agent: image
     depends_on: [storyboard]
-    description: "Generate images for each storyboard scene"
+    description: "Generate images for each scene via cloud API"
     input:
       - storyboard
       - characters
     output:
       - images
-    parallel_group: media_generation
+
+  - id: image_to_video
+    agent: image_to_video
+    depends_on: [image]
+    description: "Convert images to video clips via cloud API"
+    input:
+      - images
+      - storyboard
+    output:
+      - video_clips
 
   - id: voice
     agent: voice
     depends_on: [storyboard]
-    description: "Generate voiceover for scenes with dialogue"
+    description: "Generate voiceover for scenes via cloud TTS API"
     input:
       - storyboard
       - characters
     output:
       - audios
-    parallel_group: media_generation
+    parallel_group: media_post
 
   - id: video
     agent: video
-    depends_on: [image, voice]
-    description: "Composite final MP4 from images and audio"
+    depends_on: [image_to_video, voice]
+    description: "Merge video clips, audio, and subtitles into final MP4"
     input:
-      - images
+      - video_clips
       - audios
+      - storyboard
     output:
       - video_path
 

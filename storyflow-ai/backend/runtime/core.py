@@ -83,14 +83,13 @@ class StoryFlowRuntime:
         logger.info("StoryFlow Runtime V3 initialized")
 
     def register_existing_agents(self):
-        """Register all existing agents (wraps them without modification).
+        """Register all 7 agents with the Runtime."""
 
-        NO changes to existing agent code are needed.
-        """
         from agents.script_agent import script_agent
         from agents.character_agent import character_agent
         from agents.storyboard_agent import storyboard_agent
         from agents.image_agent import image_agent
+        from agents.image_to_video_agent import image_to_video_agent
         from agents.voice_agent import voice_agent
         from agents.video_agent import video_agent
 
@@ -101,13 +100,15 @@ class StoryFlowRuntime:
         self.workflow_engine.register_agent("storyboard", storyboard_agent,
             description="Converts script to scene-by-scene storyboard")
         self.workflow_engine.register_agent("image", image_agent,
-            description="Generates images for each storyboard scene")
+            description="Generates images via cloud API (DashScope/DALL-E)")
+        self.workflow_engine.register_agent("image_to_video", image_to_video_agent,
+            description="Converts images to video clips via cloud API (Kling/Runway)")
         self.workflow_engine.register_agent("voice", voice_agent,
-            description="Generates voiceover for scenes with dialogue")
+            description="Generates voiceover via cloud TTS API (DashScope TTS)")
         self.workflow_engine.register_agent("video", video_agent,
-            description="Composites final MP4 from images and audio")
+            description="Merges video clips + audio + subtitles into final MP4")
 
-        logger.info("Registered 6 agents with Runtime")
+        logger.info("Registered 7 agents with Runtime")
 
     def register_agent(self, name: str, agent_func, **kwargs):
         """Register a custom agent function.

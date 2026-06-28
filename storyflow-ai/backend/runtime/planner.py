@@ -126,11 +126,11 @@ class PlannerAgent:
 
     # Known task types and their default pipeline
     KNOWN_PIPELINES = {
-        "comic": ["script", "character", "storyboard", "image", "voice", "video"],
+        "comic": ["script", "character", "storyboard", "image", "image_to_video", "voice", "video"],
         "novel": ["script", "character", "chapter_outline", "text_generation"],
-        "animation": ["script", "character", "storyboard", "image", "voice", "video"],
-        "ad": ["script", "storyboard", "image", "voice", "video"],
-        "movie": ["script", "character", "storyboard", "image", "voice", "video"],
+        "animation": ["script", "character", "storyboard", "image", "image_to_video", "voice", "video"],
+        "ad": ["script", "storyboard", "image", "image_to_video", "voice", "video"],
+        "movie": ["script", "character", "storyboard", "image", "image_to_video", "voice", "video"],
     }
 
     def __init__(self, event_bus: EventBus | None = None):

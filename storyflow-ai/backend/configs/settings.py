@@ -37,15 +37,15 @@ class Settings(BaseSettings):
     IMAGE_POLL_INTERVAL: int = 3        # seconds between poll
     IMAGE_POLL_TIMEOUT: int = 120       # max wait for async APIs
 
-    # ── Image-to-Video API (e.g. 可灵 Kling / Runway / Pika) ──
-    # Provider: "kling", "runway", "pika", "mock"
-    VIDEO_API_PROVIDER: str = "kling"
-    VIDEO_API_KEY: str = ""
-    VIDEO_API_BASE_URL: str = "https://api.klingai.com/v1"
-    VIDEO_MODEL: str = "kling-v1"
-    VIDEO_DURATION: str = "5"            # "5" or "10"
-    VIDEO_POLL_INTERVAL: int = 5
-    VIDEO_POLL_TIMEOUT: int = 300
+    # ── Image-to-Video API (e.g. Kling / Runway) ──
+    # Provider: "kling", "runway", "mock"
+    I2V_API_PROVIDER: str = "kling"
+    I2V_API_KEY: str = ""
+    I2V_API_BASE_URL: str = "https://api.klingai.com/v1"
+    I2V_MODEL: str = "kling-v1"
+    I2V_DURATION: float = 5.0           # seconds per clip
+    I2V_POLL_INTERVAL: int = 5
+    I2V_POLL_TIMEOUT: int = 300
 
     # ── TTS / Voice API (e.g. CosyVoice Cloud / DashScope TTS / Azure) ──
     # Provider: "dashscope_tts", "cosyvoice_cloud", "azure", "mock"

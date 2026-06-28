@@ -1,16 +1,16 @@
 """Shared state type for agent pipeline.
 
-In v3 Runtime, state is a plain dict passed between agents.
+In Runtime V3, state is a plain dict passed between agents.
 This TypedDict provides IDE autocomplete and type hints.
 
-Pipeline: script -> character -> storyboard -> image -> voice -> video
+Pipeline: script -> character -> storyboard -> image -> image_to_video -> voice -> video
 """
 
 from typing import TypedDict
 
 
 class StoryState(TypedDict, total=False):
-    """Pipeline state — passed through all 6 agents sequentially."""
+    """Pipeline state — passed through all 7 agents sequentially."""
     # Input
     task_id: str
     story_id: str

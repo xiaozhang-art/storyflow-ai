@@ -139,7 +139,7 @@ class WorkflowEngine:
 
     # Default pipeline (used when no DSL is loaded)
     DEFAULT_PIPELINE = [
-        "script", "character", "storyboard", "image", "voice", "video",
+        "script", "character", "storyboard", "image", "image_to_video", "voice", "video",
     ]
 
     def __init__(

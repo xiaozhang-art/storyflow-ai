@@ -169,7 +169,7 @@ class SessionManager:
         """
         session = self.get(session_id)
         if session:
-            pipeline = ["script", "character", "storyboard", "image", "voice", "video"]
+            pipeline = ["script", "character", "storyboard", "image", "image_to_video", "voice", "video"]
             step_idx = pipeline.index(step) if step in pipeline else -1
 
             session.completed_steps = [

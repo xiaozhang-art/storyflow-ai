@@ -78,6 +78,9 @@
 | **模型切换** | AdapterRegistry | 改配置换模型，Agent 代码不动 |
 | **扩展 Agent** | Agent SDK | 继承 BaseAgent，一行注册 |
 | **Workflow** | YAML DSL | 声明式定义，支持并行组 |
+| **策略重试** | RetryEngine | 策略化重试：超时/限流/降级/模型切换 |
+| **四层记忆** | MemoryRuntime | Session/Character/World/Timeline 共享记忆 |
+| **全链路追踪** | TraceRuntime | Span/Token/Cost/Duration 可视化 |
 
 > **核心原则：Agent 只接收输入、返回输出，禁止互相调用。Runtime 拥有唯一调度权。**
 
@@ -86,32 +89,44 @@
 ### 设计理念
 
 ```
-                    StoryFlow Runtime V3
+                    StoryFlow Runtime V3.5
 
                     ┌────────────────────────────┐
                     │      Director Agent        │
-                    │ 全局导演 / 调度 / 重试 / 决策 │
+                    │ 全局导演 / 调度 / 决策     │
                     └────────────┬───────────────┘
                                  │
                     ┌────────────▼───────────────┐
                     │      WorkflowEngine        │
                     │  DSL + EventBus + Hooks     │
-                    │  并行执行 + 重试 + 检查点   │
+                    │  并行执行 + 检查点         │
                     └────────────┬───────────────┘
                                  │
-        ┌────────────────────────┼────────────────────────┐
+                    ┌────────────▼───────────────┐
+                    │      RetryEngine         │
+                    │  策略化重试 / 降级 / 切换  │
+                    └────────────┬───────────────┘
+                                 │
+        ┌────────────────────┼────────────────────────┐
         │                        │                        │
         ▼                        ▼                        ▼
  Planner Agent           Blackboard               QualityEngine
- (动态 DAG)            (共享状态)               (质量闭环)
+ (动态 DAG)            (共享状态)               (质量闭环+Suggestion)
         │                        │                        │
         ▼                        ▼                        ▼
     ┌───────┐              ┌──────────┐           ┌──────────┐
     │  7    │              │ Artifacts│           │Director │
     │ Agent │              │ (文件化) │           │ (决策)   │
-    └───────┘              └──────────┘           └──────────┘
+    └───┬───┘              └──────────┘           └──────────┘
         │
-  AdapterRegistry (可插拔模型，纯云端 API)
+  ┌─────┼──────────────────────────────────────┐
+  │     ▼                                      │
+  │  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
+  │  │ Memory   │  │  Trace   │  │ Adapter     │  │
+  │  │ Runtime  │  │  Runtime │  │ Registry    │  │
+  │  │ (4层)   │  │ (Span)   │  │ (云端API)   │  │
+  │  └──────────┘  └──────────┘  └─────────────┘  │
+  └──────────────────────────────────────────┘
 ```
 
 ### 关键特性
@@ -145,16 +160,50 @@ blackboard.set("scenes.0.image_url", "/storage/scene_001.png")
 # Quality 检查不通过 → Director 决定回退到 Storyboard 修改 Prompt
 ```
 
-**5. 模型热切换（Adapter）**
+**5. 策略化重试（RetryEngine）**
 ```python
-# 切换图片生成后端：改一行配置，Agent 代码不动
-IMAGE_API_PROVIDER=dashscope  # 或 openai, 或 mock
+# Agent 永远不要自己 retry —— Runtime retry
+# 内置 7 种策略：timeout / rate_limit / api_error / quality_fail / auth / content_filter / default
+# 每种策略定义：max_retries, backoff, actions
+# Actions: RETRY_SAME → MODIFY_PROMPT → SWITCH_MODEL → FALLBACK → ABORT
+retry_engine.register_policy(RetryPolicy(
+    name="image_api", max_retries=3,
+    actions=[RetryAction.RETRY_SAME, RetryAction.FALLBACK],
+))
+```
 
-# 切换图生视频后端
+**6. 四层记忆（MemoryRuntime）**
+```python
+# 所有 Agent 不只收到 prompt，而是 prompt + memory
+memory.character.upsert_character("林晓", {
+    "appearance": {"hair": "long black", "body": "slender", ...}
+})
+memory.world.set("era", "ancient China")
+
+# Image Agent 自动获得角色外观描述
+ctx = memory.build_context("image")  # → 包含 [Character Appearances] 块
+```
+
+**7. 全链路追踪（TraceRuntime）**
+```
+ScriptAgent    2.3s  1200 tokens
+  ↓
+Storyboard    5.6s  2800 tokens
+  ↓
+Image        32s   (7 API calls)
+  ↓
+Voice        12s   (7 API calls)
+  ↓
+Video        180s  → Total: $2.35
+```
+
+**8. 模型热切换（Adapter）**
+```python
+IMAGE_API_PROVIDER=dashscope  # 或 openai, 或 mock
 I2V_API_PROVIDER=kling        # 或 runway, 或 mock
 ```
 
-**6. 一行代码扩展 Agent（SDK）**
+**9. 一行代码扩展 Agent（SDK）**
 ```python
 class MusicAgent(BaseAgent):
     name = "music"
@@ -222,7 +271,7 @@ storyflow-ai/
 │   ├── prompts/                       # Prompt 模板
 │   ├── utils/                         # 工具函数
 │   │
-│   └── runtime/                       # ★ Runtime 核心
+│   └── runtime/                       # ★ Runtime 核心 (V3.5)
 │       ├── core.py                    # StoryFlowRuntime 主入口
 │       ├── event_bus.py               # EventBus (13 种事件)
 │       ├── blackboard.py              # Blackboard (点号路径)
@@ -233,6 +282,16 @@ storyflow-ai/
 │       ├── director.py                # DirectorAgent (决策)
 │       ├── planner.py                 # PlannerAgent (任务 DAG)
 │       ├── agent_sdk.py               # BaseAgent + AgentRegistry
+│       ├── retry_engine.py            # ★ RetryEngine (策略化重试)
+│       ├── memory/                    # ★ MemoryRuntime (四层记忆)
+│       │   ├── __init__.py            # MemoryRuntime 门面
+│       │   ├── base.py                # BaseMemory 抽象基类
+│       │   ├── session_memory.py      # SessionMemory (执行上下文)
+│       │   ├── character_memory.py    # CharacterMemory (角色数据)
+│       │   ├── world_memory.py        # WorldMemory (世界观)
+│       │   └── timeline_memory.py     # TimelineMemory (事件历史)
+│       ├── trace/                     # ★ TraceRuntime (全链路追踪)
+│       │   └── __init__.py            # Span / TraceTree / TraceRuntime
 │       ├── quality/                   # QualityEngine (6 种 Checker)
 │       └── adapters/                  # 5 类 Adapter (纯云端 API)
 │           └── __init__.py

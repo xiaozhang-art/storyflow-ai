@@ -43,6 +43,11 @@ from runtime.director import DirectorAgent, Decision, DecisionType
 from runtime.planner import PlannerAgent, ExecutionPlan, TaskNode
 from runtime.quality import QualityEngine, QualityResult
 
+# V1.5 Runtime Layers
+from runtime.retry_engine import RetryEngine, RetryPolicy, RetryAction, RetryResult
+from runtime.memory import MemoryRuntime, get_memory_runtime
+from runtime.trace import TraceRuntime, Span, TraceTree, get_trace_runtime
+
 # Extensibility
 from runtime.adapters import AdapterRegistry
 from runtime.agent_sdk import BaseAgent, AgentRegistry, get_agent_registry
@@ -62,6 +67,10 @@ __all__ = [
     "DirectorAgent", "Decision", "DecisionType",
     "PlannerAgent", "ExecutionPlan", "TaskNode",
     "QualityEngine", "QualityResult",
+    # V1.5 Runtime Layers
+    "RetryEngine", "RetryPolicy", "RetryAction", "RetryResult",
+    "MemoryRuntime", "get_memory_runtime",
+    "TraceRuntime", "Span", "TraceTree", "get_trace_runtime",
     # Extensibility
     "AdapterRegistry",
     "BaseAgent", "AgentRegistry", "get_agent_registry",

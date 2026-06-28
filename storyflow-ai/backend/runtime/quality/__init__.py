@@ -32,6 +32,7 @@ class QualityResult:
     score: float = 0.0  # 0.0 to 1.0
     issues: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)  # Actionable fix suggestions
     details: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -41,6 +42,7 @@ class QualityResult:
             "score": self.score,
             "issues": self.issues,
             "warnings": self.warnings,
+            "suggestions": self.suggestions,
             "details": self.details,
         }
 
@@ -79,6 +81,7 @@ class ScriptQualityChecker(BaseQualityChecker):
         outline = data.get("outline", "")
         if not outline or len(outline) < 50:
             result.issues.append(f"Outline too short ({len(outline)} chars, min 50)")
+            result.suggestions.append("Expand the outline with more plot details and character interactions")
             result.passed = False
             result.score -= 0.3
 
@@ -86,6 +89,7 @@ class ScriptQualityChecker(BaseQualityChecker):
         characters = data.get("characters", [])
         if not characters or len(characters) < 2:
             result.issues.append(f"Too few characters ({len(characters)}, min 2)")
+            result.suggestions.append("Add more characters with distinct personalities to enrich the story")
             result.passed = False
             result.score -= 0.3
 
@@ -93,6 +97,7 @@ class ScriptQualityChecker(BaseQualityChecker):
         episodes = data.get("episodes", [])
         if not episodes:
             result.issues.append("No episodes generated")
+            result.suggestions.append("Ensure the prompt provides enough narrative material for episode generation")
             result.passed = False
             result.score -= 0.4
         elif len(episodes) > 6:

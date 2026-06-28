@@ -32,6 +32,9 @@ from runtime.session_manager import SessionManager, Session, SessionStatus, get_
 from runtime.hooks import HookFramework, StepContext, HookAbort, ErrorAction
 from runtime.director import DirectorAgent, Decision, DecisionType
 from runtime.quality import QualityEngine
+from runtime.retry_engine import RetryEngine
+from runtime.memory import MemoryRuntime
+from runtime.trace import TraceRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +153,9 @@ class WorkflowEngine:
         hooks: HookFramework | None = None,
         director: DirectorAgent | None = None,
         quality_engine: QualityEngine | None = None,
+        retry_engine: RetryEngine | None = None,
+        memory: MemoryRuntime | None = None,
+        trace: TraceRuntime | None = None,
         max_retries: int = 3,
     ):
         self.event_bus = event_bus or EventBus()
@@ -158,6 +164,9 @@ class WorkflowEngine:
         self.hooks = hooks or HookFramework()
         self.director = director
         self.quality_engine = quality_engine
+        self.retry_engine = retry_engine or RetryEngine()
+        self.memory = memory or MemoryRuntime()
+        self.trace = trace or TraceRuntime()
         self.max_retries = max_retries
 
         # Registry: step_name → agent function
@@ -275,6 +284,17 @@ class WorkflowEngine:
 
         self.session_manager.update_status(session_id, SessionStatus.RUNNING)
 
+        # Start trace
+        trace_id = self.trace.start_trace(
+            session_id,
+            metadata={"prompt": state.get("prompt", ""), "genre": state.get("genre", "")},
+        )
+        root_span = self.trace._traces[trace_id].root_span if trace_id in self.trace._traces else None
+
+        # Populate memory from initial state
+        self.memory.session_id = session_id
+        self.memory.populate_from_state(state)
+
         if session.completed_steps:
             logger.info("Session %s resuming from step %s (completed: %s)",
                         session_id,
@@ -296,6 +316,15 @@ class WorkflowEngine:
                 result_state = await self._run_linear(session_id, pipeline, state, blackboard)
 
             self.session_manager.update_status(session_id, SessionStatus.COMPLETED)
+
+            # End trace
+            if root_span:
+                self.trace.end_span(
+                    root_span.span_id,
+                    status="completed",
+                    output_summary={"steps_completed": len(session.completed_steps)},
+                )
+
             await self.event_bus.publish_event(
                 EventType.SESSION_COMPLETED,
                 data={"session_id": session_id},
@@ -444,6 +473,14 @@ class WorkflowEngine:
             source="workflow_engine",
         )
 
+        # Start trace span for this step
+        step_span = self.trace.start_span(
+            name=step_name,
+            trace_id=session_id,
+            step=step_name,
+            input_summary={"attempt": 1},
+        )
+
         attempt = 0
         last_error = None
 
@@ -456,10 +493,15 @@ class WorkflowEngine:
                 # Run before-hooks
                 context = await self.hooks.run_before(context)
 
-                # Call the agent
+                # Call the agent (with memory context)
+                agent_input = dict(context.extra)
+                memory_ctx = self.memory.build_context(step_name, state=agent_input)
+                if memory_ctx:
+                    agent_input["_memory_context"] = memory_ctx
+
                 logger.info("[Session %s] Executing step '%s' (attempt %d/%d)",
                             session_id, step_name, attempt, self.max_retries)
-                result = await agent_func(context.extra)
+                result = await agent_func(agent_input)
 
                 # Save artifacts
                 await self._save_step_artifacts(session_id, step_name, result)
@@ -501,6 +543,19 @@ class WorkflowEngine:
                                         session_id, step_name)
                             return {}
 
+                # Update memory from step result
+                self.memory.populate_from_state(result)
+                self.memory.session.step_name = step_name
+                self.memory.session.attempt = attempt
+
+                # End trace span
+                if step_span:
+                    self.trace.end_span(
+                        step_span.span_id,
+                        status="completed",
+                        output_summary={"keys": list(result.keys()) if isinstance(result, dict) else []},
+                    )
+
                 # Notify: step completed
                 await self.event_bus.publish_event(
                     EventType.STEP_COMPLETED,
@@ -533,6 +588,15 @@ class WorkflowEngine:
                 last_error = e
                 logger.error("[Session %s] Step '%s' failed (attempt %d): %s",
                              session_id, step_name, attempt, e)
+
+                # End trace span (failed)
+                if step_span:
+                    self.trace.end_span(
+                        step_span.span_id,
+                        status="failed",
+                        error=str(e),
+                        retry_count=attempt - 1,
+                    )
 
                 # Consult Director if available
                 if self.director and self.director.enabled:

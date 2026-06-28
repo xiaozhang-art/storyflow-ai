@@ -36,7 +36,9 @@ from runtime.workflow_engine import WorkflowEngine
 from runtime.director import DirectorAgent
 from runtime.planner import PlannerAgent
 from runtime.quality import QualityEngine
-from runtime.adapters import AdapterRegistry
+from runtime.retry_engine import RetryEngine
+from runtime.memory import MemoryRuntime
+from runtime.trace import TraceRuntime, get_trace_runtime
 from runtime.agent_sdk import AgentRegistry, get_agent_registry
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,11 @@ class StoryFlowRuntime:
         self.quality_engine = QualityEngine(event_bus=self.event_bus)
         self.adapter_registry = AdapterRegistry()
 
+        # V1.5 Runtime Layers
+        self.retry_engine = RetryEngine(event_bus=self.event_bus)
+        self.memory = MemoryRuntime()
+        self.trace = get_trace_runtime()
+
         # Execution (depends on all above)
         self.workflow_engine = WorkflowEngine(
             event_bus=self.event_bus,
@@ -77,6 +84,9 @@ class StoryFlowRuntime:
             hooks=self.hooks,
             director=self.director,
             quality_engine=self.quality_engine,
+            retry_engine=self.retry_engine,
+            memory=self.memory,
+            trace=self.trace,
             max_retries=max_retries,
         )
 
@@ -212,12 +222,15 @@ class StoryFlowRuntime:
     def get_stats(self) -> dict:
         """Get comprehensive Runtime statistics."""
         return {
-            "version": "3.0.0",
+            "version": "3.5.0",
             "workflow_engine": self.workflow_engine.get_stats(),
             "session_manager": self.session_manager.get_stats(),
             "director": self.director.get_stats(),
             "planner": self.planner.get_stats(),
             "quality_engine": self.quality_engine.get_stats(),
+            "retry_engine": self.retry_engine.get_stats(),
+            "memory": self.memory.get_stats(),
+            "trace": self.trace.get_stats(),
             "adapters": self.adapter_registry.list_adapters(),
             "agent_registry": self.agent_registry.get_stats(),
         }

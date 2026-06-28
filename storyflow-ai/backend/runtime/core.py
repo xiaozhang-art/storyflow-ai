@@ -1,7 +1,7 @@
 """StoryFlow Runtime - The unified runtime that ties everything together.
 
-This is the main entry point for the new Runtime. It assembles:
-    - WorkflowEngine (step execution)
+This is the main entry point for the Runtime. It assembles:
+    - WorkflowEngine (step execution with DSL, parallelism, hooks)
     - EventBus (decoupled communication)
     - Blackboard (shared state)
     - ArtifactManager (file storage)
@@ -15,17 +15,13 @@ This is the main entry point for the new Runtime. It assembles:
 
 Usage:
     runtime = StoryFlowRuntime()
-
-    # Register existing agents (wraps them without modification)
     runtime.register_existing_agents()
 
-    # Create a session and run
     session = runtime.create_session(story_id="...", prompt="...", genre="...")
     result = await runtime.run(session.id)
 
-    # Or: partial regeneration
-    runtime.session_manager.reset_from_step(session.id, "image")
-    result = await runtime.run(session.id)
+    # Partial regeneration: re-run from a specific step
+    result = await runtime.rerun_step(session.id, "image")
 """
 
 import logging
@@ -49,7 +45,7 @@ logger = logging.getLogger(__name__)
 class StoryFlowRuntime:
     """The unified StoryFlow Runtime.
 
-    Assembles all Runtime components and provides a simple API:
+    Provides a simple API:
         1. create_session() → session
         2. run(session_id) → result
         3. rerun_step(session_id, step) → result (partial regeneration)
@@ -67,28 +63,27 @@ class StoryFlowRuntime:
         self.hooks = HookFramework()
         self.agent_registry = get_agent_registry()
 
-        # Execution
-        self.workflow_engine = WorkflowEngine(
-            event_bus=self.event_bus,
-            artifact_manager=self.artifact_manager,
-            session_manager=self.session_manager,
-            hooks=self.hooks,
-            max_retries=max_retries,
-        )
-
         # Intelligence
         self.director = DirectorAgent(event_bus=self.event_bus)
         self.planner = PlannerAgent(event_bus=self.event_bus)
         self.quality_engine = QualityEngine(event_bus=self.event_bus)
         self.adapter_registry = AdapterRegistry()
 
-        logger.info("StoryFlow Runtime initialized")
+        # Execution (depends on all above)
+        self.workflow_engine = WorkflowEngine(
+            event_bus=self.event_bus,
+            artifact_manager=self.artifact_manager,
+            session_manager=self.session_manager,
+            hooks=self.hooks,
+            director=self.director,
+            quality_engine=self.quality_engine,
+            max_retries=max_retries,
+        )
+
+        logger.info("StoryFlow Runtime V3 initialized")
 
     def register_existing_agents(self):
-        """Register all existing LangGraph-compatible agents.
-
-        This wraps the existing agent functions (which take StoryState
-        and return a dict) into the Runtime's agent registry.
+        """Register all existing agents (wraps them without modification).
 
         NO changes to existing agent code are needed.
         """
@@ -112,7 +107,7 @@ class StoryFlowRuntime:
         self.workflow_engine.register_agent("video", video_agent,
             description="Composites final MP4 from images and audio")
 
-        logger.info("Registered 6 existing agents with Runtime")
+        logger.info("Registered 6 agents with Runtime")
 
     def register_agent(self, name: str, agent_func, **kwargs):
         """Register a custom agent function.
@@ -160,7 +155,7 @@ class StoryFlowRuntime:
         if not session:
             raise ValueError(f"Session {session_id} not found")
 
-        # V2.5: Use Planner if available
+        # Use Planner if requested
         if session.metadata.get("use_planner"):
             plan = await self.planner.plan(
                 prompt=session.prompt,
@@ -203,52 +198,15 @@ class StoryFlowRuntime:
         self.session_manager.reset_from_step(session_id, step_name)
 
         # Load state from artifacts of completed steps
-        state = {"story_id": self.session_manager.get(session_id).story_id}
-        for completed_step in self.session_manager.get(session_id).completed_steps:
+        session = self.session_manager.get(session_id)
+        state = {"story_id": session.story_id}
+        for completed_step in session.completed_steps:
             artifact = self.artifact_manager.load_json(session_id, completed_step)
             if artifact:
                 if isinstance(artifact, dict):
                     state.update(artifact)
 
         return await self.workflow_engine.run(session_id, state)
-
-    async def run_with_quality(self, session_id: str) -> dict:
-        """Run pipeline with quality checks after each step.
-
-        This is V3 mode: quality engine runs after each step,
-        and the Director can intervene on failures.
-        """
-        # Enable director and quality engine
-        self.director.enabled = True
-        self.quality_engine.enabled = True
-
-        # Register quality hooks
-        self.hooks.add_after("script", self._quality_after_hook("script"))
-        self.hooks.add_after("character", self._quality_after_hook("character"))
-        self.hooks.add_after("storyboard", self._quality_after_hook("storyboard"))
-        self.hooks.add_after("image", self._quality_after_hook("image"))
-        self.hooks.add_after("voice", self._quality_after_hook("voice"))
-
-        return await self.run(session_id)
-
-    def _quality_after_hook(self, step_name: str):
-        """Create an after-hook that runs quality checks.
-
-        Returns an async function suitable for hooks.add_after().
-        """
-        async def quality_hook(context, result):
-            if not result:
-                return result
-            qr = await self.quality_engine.check(
-                step_name, result, session_id=context.session_id
-            )
-            if not qr.passed:
-                logger.warning("Quality check failed for %s: %s",
-                               step_name, qr.issues)
-                # Don't raise - let the pipeline continue
-                # The Director will decide if intervention is needed
-            return result
-        return quality_hook
 
     def get_stats(self) -> dict:
         """Get comprehensive Runtime statistics."""

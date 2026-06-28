@@ -245,6 +245,67 @@ class DirectorAgent:
                 confidence=0.5,
             )
 
+    async def decide_on_quality_fail(self, step: str, quality_result,
+                                      session_id: str) -> Decision:
+        """Called by WorkflowEngine when a quality check fails.
+
+        The Director analyzes the quality issues and decides whether
+        to retry, skip, or continue.
+
+        Args:
+            step: The step that failed quality
+            quality_result: QualityResult from the quality engine
+            session_id: Session ID
+
+        Returns:
+            A Decision
+        """
+        issues = quality_result.issues
+        score = quality_result.score
+
+        # High score (close to passing): retry with hope of improvement
+        if score >= 0.7:
+            decision = Decision(
+                type=DecisionType.RETRY,
+                step=step,
+                reason=f"Quality almost passed (score={score:.1f}), retrying. "
+                       f"Issues: {', '.join(issues[:2])}",
+                confidence=0.7,
+            )
+        # Very low score: the step output is fundamentally wrong
+        elif score < 0.3:
+            # Determine rollback target
+            rollback_map = {
+                "image": "storyboard",
+                "voice": "storyboard",
+                "character": "script",
+                "storyboard": "character",
+            }
+            target = rollback_map.get(step, step)
+
+            decision = Decision(
+                type=DecisionType.ROLLBACK if target != step else DecisionType.RETRY,
+                step=step,
+                target_step=target,
+                reason=f"Quality critically low (score={score:.1f}). "
+                       f"Issues: {', '.join(issues[:3])}. "
+                       f"{'Rolling back to ' + target + ' to fix root cause.' if target != step else 'Retrying with modified input.'}",
+                confidence=0.8,
+            )
+        else:
+            # Medium score: retry is reasonable
+            decision = Decision(
+                type=DecisionType.RETRY,
+                step=step,
+                reason=f"Quality check failed (score={score:.1f}). "
+                       f"Issues: {', '.join(issues[:2])}",
+                confidence=0.6,
+            )
+
+        self._log_decision(decision, session_id)
+        await self._publish_decision(decision, session_id)
+        return decision
+
     async def _publish_decision(self, decision: Decision, session_id: str):
         """Publish a director decision event."""
         await self.event_bus.publish_event(

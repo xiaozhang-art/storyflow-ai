@@ -2,7 +2,7 @@
 
 # 🎬 StoryFlow AI
 
-**基于 Multi-Agent Runtime 的 AI 漫剧自动生成平台**
+**基于 StoryFlow Runtime 的 AI 漫剧自动生成平台**
 
 用户输入一段创意，系统通过 6 个 AI Agent 协作，自动完成
 **剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 配音合成 → 视频导出**，
@@ -10,7 +10,7 @@
 
 **不只是漫剧项目，而是一个支持 Workflow 编排、多 Agent 协作、事件驱动、可插拔模型和质量闭环的 AI Runtime 平台。**
 
-[系统架构](#系统架构) · [Runtime V3](#runtime-v3-新架构) · [快速开始](#快速开始) · [API 文档](#api-接口) · [配置说明](#配置项)
+[系统架构](#系统架构) · [Runtime 架构](#runtime-架构) · [快速开始](#快速开始) · [API 文档](#api-接口) · [配置说明](#配置项)
 
 </div>
 
@@ -31,29 +31,27 @@
 │              (CORS · 路由 · 静态文件 · WebSocket)            │
 └─────────────────────────┬───────────────────────────────────┘
                           │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-┌─────────────┐  ┌──────────────┐  ┌──────────────────┐
-│  LangGraph  │  │  Agent OS    │  │  StoryFlow       │
-│  Pipeline   │  │  Runtime v2  │  │  Runtime V3      │
-│  (v1 默认)  │  │  (可选)      │  │  (新架构)        │
-│             │  │              │  │                  │
-│  串行 6 步  │  │  Hook/Memory │  │  EventBus        │
-│  StateGraph │  │  Skill/A2A   │  │  Blackboard      │
-│             │  │  Scheduler   │  │  Artifacts       │
-│             │  │              │  │  Director        │
-│             │  │              │  │  Planner         │
-│             │  │              │  │  Quality Engine  │
-│             │  │              │  │  AdapterRegistry  │
-│             │  │              │  │  Agent SDK       │
-└─────────────┘  └──────────────┘  └──────────────────┘
-          │               │               │
-          └───────────────┼───────────────┘
                           ▼
-              ┌───────────────────┐
-              │   6 个 Agent      │
-              │  (完全不改)       │
-              └───────────────────┘
+              ┌───────────────────────┐
+              │   StoryFlow Runtime    │
+              │                       │
+              │  WorkflowEngine       │
+              │  EventBus             │
+              │  Blackboard           │
+              │  ArtifactManager      │
+              │  SessionManager       │
+              │  HookFramework        │
+              │  DirectorAgent        │
+              │  PlannerAgent         │
+              │  QualityEngine        │
+              │  AdapterRegistry      │
+              │  Agent SDK            │
+              └───────────┬───────────┘
+                          │
+              ┌───────────▼───────────┐
+              │     6 个 Agent        │
+              │  (零改动，Runtime 调度) │
+              └───────────┬───────────┘
                           │
           ┌───────────────┼───────────────┐
           ▼               ▼               ▼
@@ -63,32 +61,28 @@
     └──────────┘   └───────────┘   └───────────┘
 ```
 
-### 三后端引擎
+### Runtime 能力矩阵
 
-| | LangGraph (v1) | Agent OS Runtime (v2) | **StoryFlow Runtime (v3)** |
-|--|--|--|--|
-| **触发** | 默认 | `USE_RUNTIME=true` | `USE_V3_RUNTIME=true` |
-| **编排** | StateGraph 串行 | RuntimeWorkflowRunner | **WorkflowEngine + EventBus** |
-| **通信** | 状态字典 | MCP + A2A MessageBus | **EventBus (pub/sub)** |
-| **共享状态** | TypedDict | Memory Manager | **Blackboard (读写 + 通知)** |
-| **中间产物** | 无 | 无 | **ArtifactManager (文件化)** |
-| **会话管理** | 无 | SessionManager (V2) | **SessionManager (部分重生成)** |
-| **质量门禁** | 无 | QualityGate Hook | **QualityEngine (6 种 Checker)** |
-| **决策** | 无 | 无 | **DirectorAgent (观察-思考-决策)** |
-| **规划** | 固定 6 步 | 固定 6 步 | **PlannerAgent (动态 DAG)** |
-| **Hook** | 无 | 14 种生命周期事件 | **Before/After/Error Hook** |
-| **模型切换** | 硬编码 | 硬编码 | **AdapterRegistry (改配置换模型)** |
-| **扩展 Agent** | 改代码 | 改代码 | **Agent SDK (继承 BaseAgent)** |
-| **Workflow** | 代码定义 | 代码定义 | **YAML DSL 声明式** |
-| **Agent 改动** | — | — | **零改动** |
+| 能力 | 实现 | 说明 |
+|------|------|------|
+| **编排** | WorkflowEngine + YAML DSL | 支持线性/并行/DAG 执行 |
+| **通信** | EventBus (pub/sub) | 所有组件通过事件解耦 |
+| **共享状态** | Blackboard | 点号路径读写 + 变更通知 |
+| **中间产物** | ArtifactManager | 文件化存储，支持局部重生成 |
+| **会话管理** | SessionManager | 从任意步骤恢复/重跑 |
+| **质量门禁** | QualityEngine | 6 种 Checker 自动质检 |
+| **决策** | DirectorAgent | 观察-思考-决策（不生成内容） |
+| **规划** | PlannerAgent | 需求拆解为可执行任务 DAG |
+| **Hook** | HookFramework | Before/After/Error 横切关注点 |
+| **模型切换** | AdapterRegistry | 改配置换模型，Agent 代码不动 |
+| **扩展 Agent** | Agent SDK | 继承 BaseAgent，一行注册 |
+| **Workflow** | YAML DSL | 声明式定义，支持并行组 |
 
-> **核心原则：所有 Runtime 版本都不修改任何现有 Agent 代码。**
+> **核心原则：Agent 只接收输入、返回输出，禁止互相调用。Runtime 拥有唯一调度权。**
 
-## Runtime V3 新架构
+## Runtime 架构
 
-### 设计理念：渐进式重构
-
-从串行 Pipeline 逐步演化为真正的 AI Runtime，每个阶段都可以独立运行。
+### 设计理念
 
 ```
                     StoryFlow Runtime V3
@@ -100,7 +94,8 @@
                                  │
                     ┌────────────▼───────────────┐
                     │      WorkflowEngine        │
-                    │  EventBus + Hooks + Retry   │
+                    │  DSL + EventBus + Hooks     │
+                    │  并行执行 + 重试 + 检查点   │
                     └────────────┬───────────────┘
                                  │
         ┌────────────────────────┼────────────────────────┐
@@ -117,25 +112,6 @@
         │
   AdapterRegistry (可插拔模型)
 ```
-
-### 新增文件说明
-
-| 文件 | 阶段 | 职责 |
-|------|------|------|
-| `runtime/event_bus.py` | V1 | 异步事件总线，所有组件通过发布/订阅事件通信 |
-| `runtime/blackboard.py` | V1.5 | 共享状态空间，Agent 读写不直接调用 |
-| `runtime/artifact_manager.py` | V1 | 文件化中间产物管理，支持部分重生成 |
-| `runtime/session_manager.py` | V1 | 会话跟踪，支持从任意步骤恢复/重跑 |
-| `runtime/hooks.py` | V1.5 | Before/After/Error Hook 框架 |
-| `runtime/workflow_engine.py` | V1 | 步骤执行引擎，集成 EventBus + Blackboard + Artifacts |
-| `runtime/core.py` | V1 | StoryFlowRuntime 主类，组装所有组件 |
-| `runtime/director.py` | V2 | Director Agent：观察、思考、决策（不生成内容） |
-| `runtime/planner.py` | V2.5 | Planner Agent：需求拆解为可执行任务 DAG |
-| `runtime/quality/` | V3 | 质量引擎：6 种 Checker（Script/Character/Storyboard/Image/Voice/Consistency） |
-| `runtime/adapters/` | V3 | 模型适配器：LLM/Image/Voice/Video 可插拔切换 |
-| `runtime/agent_sdk.py` | V3 | Agent SDK：BaseAgent 基类 + AgentRegistry 自动发现 |
-| `workflows/comic.yaml` | V3 | 漫剧 Workflow DSL 声明式定义 |
-| `workflows/novel.yaml` | V3 | 小说 Workflow DSL 声明式定义 |
 
 ### 关键特性
 
@@ -201,7 +177,7 @@ steps:
 ```
 storyflow-ai/
 ├── backend/
-│   ├── main.py                        # FastAPI 入口 (v3.0.0)
+│   ├── main.py                        # FastAPI 入口 (v4.0.0)
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   │
@@ -220,7 +196,7 @@ storyflow-ai/
 │   ├── services/                      # 业务逻辑
 │   ├── repositories/                  # 数据访问
 │   │
-│   ├── agents/                        # ⭐ 6 个 Agent (完全不改)
+│   ├── agents/                        # 6 个 Agent (零改动)
 │   │   ├── script_agent.py
 │   │   ├── character_agent.py
 │   │   ├── storyboard_agent.py
@@ -230,46 +206,32 @@ storyflow-ai/
 │   │
 │   ├── workflows/
 │   │   ├── state.py                   # StoryState TypedDict
-│   │   ├── story_workflow.py          # LangGraph 编排
-│   │   ├── runtime_workflow.py        # V2 Runtime 适配层
-│   │   ├── comic.yaml                 # ⭐ 漫剧 Workflow DSL
-│   │   └── novel.yaml                 # ⭐ 小说 Workflow DSL
+│   │   ├── runtime_workflow.py        # Runtime 执行入口
+│   │   ├── comic.yaml                 # 漫剧 Workflow DSL
+│   │   └── novel.yaml                 # 小说 Workflow DSL
 │   │
 │   ├── tools/                         # ComfyUI / CosyVoice / FFmpeg
 │   ├── tasks/
-│   │   └── runner.py                  # 三后端任务运行器
+│   │   └── runner.py                  # 任务运行器 (Runtime only)
 │   ├── app/                           # Database / Redis / LLM
-│   ├── memory/                        # Qdrant 向量记忆
 │   ├── utils/                         # 工具函数
-│   ├── skills/                        # V2 Skill YAML 定义
 │   │
-│   └── runtime/                       # ⭐⭐ Runtime 核心
-│       ├── __init__.py                # V2+V3 统一导出
-│       ├── core.py                    # ⭐ StoryFlowRuntime (V3 主入口)
-│       ├── event_bus.py               # ⭐ EventBus (异步 pub/sub)
-│       ├── blackboard.py              # ⭐ Blackboard (共享状态)
-│       ├── artifact_manager.py        # ⭐ ArtifactManager (文件化)
-│       ├── session_manager.py         # ⭐ SessionManager (会话跟踪)
-│       ├── hooks.py                   # ⭐ HookFramework
-│       ├── workflow_engine.py         # ⭐ WorkflowEngine (步骤执行)
-│       ├── director.py                # ⭐ DirectorAgent (决策)
-│       ├── planner.py                 # ⭐ PlannerAgent (DAG 拆解)
-│       ├── agent_sdk.py               # ⭐ BaseAgent + AgentRegistry
-│       ├── quality/                   # ⭐ QualityEngine (6 种 Checker)
-│       ├── adapters/                  # ⭐ Model Adapters (可插拔)
-│       │
-│       ├── app.py                     # V2 RuntimeApp (legacy)
-│       ├── adapter.py                 # V2 适配器 (legacy)
-│       ├── agent_runtime/             # V2 Agent 运行时 (legacy)
-│       ├── execution/                 # V2 调度器 (legacy)
-│       ├── conversation/              # V2 对话管理 (legacy)
-│       ├── skill_engine/              # V2 Skill 引擎 (legacy)
-│       ├── memory/                    # V2 记忆系统 (legacy)
-│       ├── session/                   # V2 会话管理 (legacy)
-│       ├── hook/                      # V2 事件钩子 (legacy)
-│       ├── handlers/                  # V2 Handler (legacy)
-│       ├── mcp/                       # V2 MCP 协议 (legacy)
-│       └── message_bus/               # V2 消息总线 (legacy)
+│   └── runtime/                       # Runtime 核心
+│       ├── __init__.py                # 统一导出
+│       ├── core.py                    # StoryFlowRuntime 主入口
+│       ├── event_bus.py               # EventBus (异步 pub/sub, 13 种事件)
+│       ├── blackboard.py              # Blackboard (共享状态, 点号路径)
+│       ├── artifact_manager.py        # ArtifactManager (文件化 + 检查点)
+│       ├── session_manager.py         # SessionManager (会话 + 部分重生成)
+│       ├── hooks.py                   # HookFramework (Before/After/Error)
+│       ├── workflow_engine.py         # WorkflowEngine (DSL + 并行 + Hook)
+│       ├── director.py                # DirectorAgent (决策: retry/rollback/skip)
+│       ├── planner.py                 # PlannerAgent (任务 DAG 拆解)
+│       ├── agent_sdk.py               # BaseAgent + AgentRegistry
+│       ├── quality/                   # QualityEngine (6 种 Checker)
+│       │   └── __init__.py
+│       └── adapters/                  # Model Adapters (可插拔)
+│           └── __init__.py
 │
 ├── frontend/                          # React 18 + TypeScript + Ant Design 5
 │   └── src/
@@ -284,7 +246,6 @@ storyflow-ai/
 ├── deploy/
 │   ├── docker-compose.yml
 │   ├── nginx/default.conf
-│   ├── .env.example                  # 含 V3 新配置项
 │   └── init.sql
 │
 └── scripts/
@@ -316,14 +277,11 @@ cp deploy/.env.example backend/.env
 # 基础服务
 cd deploy && docker compose up -d postgres redis && cd ..
 
-# 后端 (LangGraph 模式，默认)
+# 后端
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-# 后端 (V3 Runtime 模式)
-USE_V3_RUNTIME=true python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 # 前端
 cd frontend && npm install && npm run dev
@@ -371,7 +329,7 @@ docker compose up -d
 │  随机 seed/镜    │  SDXL 1024x1024
 │  2x 重试/镜      │  部分失败 → image_partial
 └────────┬─────────┘
-         ▼
+         ▼ (可并行)
 ┌──────────────────┐
 │  Voice Agent     │  CosyVoice 逐镜配音
 │  性别→音色映射   │  base64/URL 双格式
@@ -411,33 +369,28 @@ task           ─── 任务 (status, progress, current_step, error_message)
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis |
 | `STORAGE_PATH` | `./storage` | 文件存储 |
 
-### Runtime 后端选择
+### Runtime 配置
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `USE_RUNTIME` | `false` | Agent OS Runtime v2.0 |
-| `USE_V3_RUNTIME` | `false` | ⭐ StoryFlow Runtime V3 (推荐) |
-
-### V3 Runtime 配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
+| `ENABLE_QUALITY` | `true` | 启用质量检查 |
+| `ENABLE_DIRECTOR` | `false` | 启用 Director 自动决策 |
 | `IMAGE_API_PROVIDER` | `comfyui` | 图片后端 (`comfyui` / `mock`) |
 | `VOICE_API_PROVIDER` | `cosyvoice` | 语音后端 (`cosyvoice` / `mock`) |
 | `VIDEO_API_PROVIDER` | `ffmpeg` | 视频后端 (`ffmpeg` / `mock`) |
 | `ARTIFACT_PATH` | `./artifacts` | 中间产物存储目录 |
 
-## 演进路线
+## API 接口
 
-| 阶段 | 目标 | Agent 改动 | 状态 |
-|------|------|-----------|------|
-| **V1** | Runtime 接管调度 + Session + Artifact | ❌ 零改动 | ✅ |
-| **V1.5** | EventBus + Blackboard + Hook 事件驱动 | ❌ 零改动 | ✅ |
-| **V2** | Director Agent 失败重试/质量回流 | ❌ 零改动 | ✅ |
-| **V2.5** | Planner Agent 动态 DAG 拆解 | ❌ 零改动 | ✅ |
-| **V3** | Quality Engine + Adapter + SDK + DSL | ⚠️ 少量 | ✅ |
-
-**整个演进过程：不推翻已有代码，在 StoryFlow AI 基础上逐层抽象 Runtime 能力。**
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/health` | 健康检查 |
+| `GET` | `/api/runtime/stats` | Runtime 统计信息 |
+| `POST` | `/api/runtime/session/{id}/rerun/{step}` | 部分重生成 |
+| `POST` | `/api/story/` | 创建故事 |
+| `GET` | `/api/story/{id}` | 获取故事详情 |
+| `POST` | `/api/task/generate` | 触发生成任务 |
+| `WS` | `/api/task/{id}/ws` | 实时进度推送 |
 
 ## License
 

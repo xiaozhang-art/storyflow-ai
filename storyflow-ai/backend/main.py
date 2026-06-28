@@ -1,15 +1,17 @@
 """StoryFlow AI - AI漫剧自动生成平台.
 
-Upgraded with Agent OS Runtime:
-- MCP Protocol (unified envelope)
-- Agent Runtime (stateless executor)
-- A2A Message Bus (agent communication)
-- Skill Engine (controlled generation)
-- Hook Framework (full observability)
-- Conversation Manager (multi-agent orchestration)
-- Session Manager (state management)
-- Unified Memory System (4-layer memory)
-- Execution Scheduler (DAG executor, worker pools)
+Powered by StoryFlow Runtime V3:
+- EventBus (decoupled pub/sub)
+- Blackboard (shared state)
+- ArtifactManager (file-based storage + checkpoints)
+- SessionManager (partial regeneration)
+- HookFramework (before/after/error hooks)
+- WorkflowEngine (DSL-driven, parallel execution)
+- DirectorAgent (decision making: retry/rollback/skip)
+- PlannerAgent (task DAG decomposition)
+- QualityEngine (multi-dimensional quality checking)
+- AdapterRegistry (pluggable model backends)
+- AgentSDK (extensible agent framework)
 """
 
 import os
@@ -56,12 +58,31 @@ async def lifespan(app: FastAPI):
     # Ensure storage directory exists
     os.makedirs(settings.STORAGE_PATH, exist_ok=True)
 
-    # Initialize Agent OS Runtime
+    # Initialize StoryFlow Runtime V3
     try:
-        from runtime.app import init_runtime
-        runtime_app = init_runtime(settings=settings, redis_client=redis)
-        logger.info("Agent OS Runtime initialized")
-        app.state.runtime = runtime_app
+        from runtime.core import get_runtime
+        runtime = get_runtime()
+        runtime.register_existing_agents()
+
+        # Load default DSL workflow
+        dsl_path = os.path.join(
+            os.path.dirname(__file__), "workflows", "comic.yaml"
+        )
+        if os.path.exists(dsl_path):
+            runtime.workflow_engine.load_dsl(dsl_path)
+
+        # Configure from environment
+        enable_quality = os.environ.get("ENABLE_QUALITY", "true").lower() in ("true", "1", "yes")
+        enable_director = os.environ.get("ENABLE_DIRECTOR", "false").lower() in ("true", "1", "yes")
+
+        if runtime.quality_engine:
+            runtime.quality_engine.enabled = enable_quality
+        if runtime.director:
+            runtime.director.enabled = enable_director
+
+        app.state.runtime = runtime
+        logger.info("StoryFlow Runtime V3 initialized (quality=%s, director=%s)",
+                     enable_quality, enable_director)
     except Exception as e:
         logger.error(f"Runtime initialization failed: {e}")
         logger.exception("Runtime init error details:")
@@ -96,8 +117,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="3.0.0",
-    description="基于 Multi-Agent Runtime 的 AI 漫剧自动生成平台 (支持 Runtime V3)",
+    version="4.0.0",
+    description="基于 StoryFlow Runtime V3 的 AI 漫剧自动生成平台",
     lifespan=lifespan,
 )
 
@@ -134,16 +155,28 @@ async def health_check():
     return {
         "status": "ok",
         "app": settings.APP_NAME,
-        "version": "3.0.0",
-        "runtime_v2": bool(getattr(app.state, "runtime", None)),
-        "runtime_v3": True,
+        "version": "4.0.0",
+        "runtime": bool(getattr(app.state, "runtime", None)),
     }
 
 
 @app.get("/api/runtime/stats")
 async def runtime_stats():
-    """Get Agent OS Runtime statistics."""
+    """Get StoryFlow Runtime statistics."""
     runtime = getattr(app.state, "runtime", None)
     if not runtime:
         return {"error": "Runtime not initialized"}
     return runtime.get_stats()
+
+
+@app.post("/api/runtime/session/{session_id}/rerun/{step}")
+async def rerun_step(session_id: str, step: str):
+    """Re-run a specific step (partial regeneration)."""
+    runtime = getattr(app.state, "runtime", None)
+    if not runtime:
+        return {"error": "Runtime not initialized"}
+    try:
+        result = await runtime.rerun_step(session_id, step)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}

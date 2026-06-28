@@ -1,0 +1,85 @@
+# StoryFlow Workflow DSL
+# Defines the pipeline as a declarative YAML file.
+# The Runtime executes this automatically.
+
+name: comic_drama
+description: "Standard comic drama generation pipeline"
+version: "1.0"
+
+steps:
+  - id: script
+    agent: script
+    description: "Generate script with outline, characters, and episodes"
+    input:
+      - prompt
+      - genre
+    output:
+      - outline
+      - episodes
+      - characters
+
+  - id: character
+    agent: character
+    depends_on: [script]
+    description: "Enrich character visual descriptions"
+    input:
+      - characters
+      - outline
+    output:
+      - characters
+
+  - id: storyboard
+    agent: storyboard
+    depends_on: [character]
+    description: "Convert script to scene-by-scene storyboard"
+    input:
+      - episodes
+      - characters
+    output:
+      - storyboard
+      - scenes
+
+  - id: image
+    agent: image
+    depends_on: [storyboard]
+    description: "Generate images for each storyboard scene"
+    input:
+      - storyboard
+      - characters
+    output:
+      - images
+    parallel_group: media_generation
+
+  - id: voice
+    agent: voice
+    depends_on: [storyboard]
+    description: "Generate voiceover for scenes with dialogue"
+    input:
+      - storyboard
+      - characters
+    output:
+      - audios
+    parallel_group: media_generation
+
+  - id: video
+    agent: video
+    depends_on: [image, voice]
+    description: "Composite final MP4 from images and audio"
+    input:
+      - images
+      - audios
+    output:
+      - video_path
+
+quality:
+  enabled: true
+  check_after:
+    - script
+    - character
+    - storyboard
+    - image
+    - voice
+
+director:
+  enabled: false
+  max_retries: 3

@@ -1,0 +1,32 @@
+# Novel generation workflow
+name: novel
+description: "AI novel chapter generation pipeline"
+version: "1.0"
+
+steps:
+  - id: script
+    agent: script
+    description: "Generate novel outline and chapter plan"
+    input: [prompt, genre]
+    output: [outline, chapters, characters]
+
+  - id: character
+    agent: character
+    depends_on: [script]
+    description: "Enrich character descriptions"
+    input: [characters, outline]
+    output: [characters]
+
+  - id: text_generation
+    agent: novel_writer
+    depends_on: [character]
+    description: "Generate full novel text chapter by chapter"
+    input: [chapters, characters]
+    output: [novel_text]
+
+quality:
+  enabled: true
+  check_after: [script, character]
+
+director:
+  enabled: false

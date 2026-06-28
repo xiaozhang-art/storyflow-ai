@@ -2,15 +2,15 @@
 
 # 🎬 StoryFlow AI
 
-**基于 StoryFlow Runtime 的 AI 漫剧自动生成平台**
+**基于 StoryFlow Runtime V3 的 AI 漫剧自动生成平台**
 
-用户输入一段创意，系统通过 6 个 AI Agent 协作，自动完成
-**剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 配音合成 → 视频导出**，
+用户输入一段创意，系统通过 7 个 AI Agent 协作，自动完成
+**剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 图生视频 → 配音合成 → 视频导出**，
 最终输出可播放的 MP4 漫剧视频。
 
-**不只是漫剧项目，而是一个支持 Workflow 编排、多 Agent 协作、事件驱动、可插拔模型和质量闭环的 AI Runtime 平台。**
+**纯云端 API 架构，零本地 GPU 依赖。不只是漫剧项目，更是一个支持 Workflow 编排、多 Agent 协作、事件驱动、可插拔模型和质量闭环的通用 AI Runtime 平台。**
 
-[系统架构](#系统架构) · [Runtime 架构](#runtime-架构) · [快速开始](#快速开始) · [API 文档](#api-接口) · [配置说明](#配置项)
+[系统架构](#系统架构) · [Runtime 架构](#runtime-架构) · [快速开始](#快速开始) · [API 文档](#api-接口) · [配置说明](#配置项) · [详细文档](项目介绍.md)
 
 </div>
 
@@ -21,7 +21,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     React Frontend                          │
-│              (Vite + TypeScript + Ant Design 5)              │
+│              (Vite 5 + TypeScript + Ant Design 5)           │
 │                                                             │
 │  HomePage ──→ StoryPage (WebSocket 进度) ──→ ResultPage     │
 └─────────────────────────┬───────────────────────────────────┘
@@ -34,7 +34,7 @@
                           ▼
               ┌───────────────────────┐
               │   StoryFlow Runtime    │
-              │                       │
+              │       (V3 核心)       │
               │  WorkflowEngine       │
               │  EventBus             │
               │  Blackboard           │
@@ -49,16 +49,17 @@
               └───────────┬───────────┘
                           │
               ┌───────────▼───────────┐
-              │     6 个 Agent        │
+              │     7 个 Agent        │
               │  (零改动，Runtime 调度) │
               └───────────┬───────────┘
                           │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-    ┌──────────┐   ┌───────────┐   ┌───────────┐
-    │  LLM     │   │ ComfyUI / │   │ CosyVoice│
-    │  API     │   │ SDXL API  │   │ / TTS API │
-    └──────────┘   └───────────┘   └───────────┘
+          ┌───────┬───────┼───────┬───────┐
+          ▼       ▼       ▼       ▼       ▼
+    ┌──────────┐ ┌─────────┐ ┌────────┐ ┌────────┐
+    │  LLM     │ │ DashScope│ │DashScope│ │ Kling/ │
+    │  API     │ │ 万相 API │ │ TTS API│ │ Runway │
+    │ (GPT-4o) │ │ / DALL-E │ │        │ │I2V API │
+    └──────────┘ └─────────┘ └────────┘ └────────┘
 ```
 
 ### Runtime 能力矩阵
@@ -66,7 +67,7 @@
 | 能力 | 实现 | 说明 |
 |------|------|------|
 | **编排** | WorkflowEngine + YAML DSL | 支持线性/并行/DAG 执行 |
-| **通信** | EventBus (pub/sub) | 所有组件通过事件解耦 |
+| **通信** | EventBus (pub/sub) | 13 种事件类型，组件完全解耦 |
 | **共享状态** | Blackboard | 点号路径读写 + 变更通知 |
 | **中间产物** | ArtifactManager | 文件化存储，支持局部重生成 |
 | **会话管理** | SessionManager | 从任意步骤恢复/重跑 |
@@ -106,11 +107,11 @@
         │                        │                        │
         ▼                        ▼                        ▼
     ┌───────┐              ┌──────────┐           ┌──────────┐
-    │  6    │              │ Artifacts│           │Director │
+    │  7    │              │ Artifacts│           │Director │
     │ Agent │              │ (文件化) │           │ (决策)   │
     └───────┘              └──────────┘           └──────────┘
         │
-  AdapterRegistry (可插拔模型)
+  AdapterRegistry (可插拔模型，纯云端 API)
 ```
 
 ### 关键特性
@@ -121,33 +122,36 @@
 
 Runtime：
   Session.reset_from_step("image")
-  → 只重跑 image/voice/video
+  → 只重跑 image/image_to_video/voice/video
   → 不重跑 script/character/storyboard
 ```
 
 **2. 事件驱动（EventBus）**
 ```python
-# Image Agent 完成后自动触发 Voice Agent
-event_bus.subscribe(EventType.STEP_COMPLETED, on_image_done)
+# 任何 Agent 完成后，所有订阅者自动收到通知
+event_bus.subscribe(EventType.STEP_COMPLETED, on_step_done)
 ```
 
 **3. Agent 零耦合（Blackboard）**
 ```python
 # Agent 不直接调用其他 Agent
 blackboard.set("scenes.0.image_url", "/storage/scene_001.png")
-# Voice Agent 通过订阅 Blackboard 变化获取通知
+# 下游 Agent 通过 Blackboard 读取上游数据
 ```
 
 **4. Director 决策**
 ```python
-# Image 失败 → Director 决定回退到 Storyboard 修改 Prompt
-# Quality 检查不通过 → Director 决定重试或回退
+# Image 失败 → Director 决定重试
+# Quality 检查不通过 → Director 决定回退到 Storyboard 修改 Prompt
 ```
 
 **5. 模型热切换（Adapter）**
 ```python
 # 切换图片生成后端：改一行配置，Agent 代码不动
-IMAGE_API_PROVIDER=dashscope  # 或 comfyui, 或 mock
+IMAGE_API_PROVIDER=dashscope  # 或 openai, 或 mock
+
+# 切换图生视频后端
+I2V_API_PROVIDER=kling        # 或 runway, 或 mock
 ```
 
 **6. 一行代码扩展 Agent（SDK）**
@@ -165,11 +169,15 @@ steps:
   - id: image
     agent: image
     depends_on: [storyboard]
-    parallel_group: media_generation
+  - id: image_to_video
+    agent: image_to_video
+    depends_on: [image]
   - id: voice
     agent: voice
     depends_on: [storyboard]
-    parallel_group: media_generation  # 与 image 并行
+  - id: video
+    agent: video
+    depends_on: [image_to_video, voice]
 ```
 
 ## 项目结构
@@ -182,10 +190,7 @@ storyflow-ai/
 │   ├── Dockerfile
 │   │
 │   ├── configs/
-│   │   └── settings.py                # Pydantic Settings
-│   │
-│   ├── prompts/                       # 集中管理的 Prompt 模板
-│   │   └── __init__.py
+│   │   └── settings.py                # Pydantic Settings (纯 API 配置)
 │   │
 │   ├── models/                        # SQLAlchemy ORM
 │   │   ├── base.py, story.py, character.py
@@ -196,41 +201,40 @@ storyflow-ai/
 │   ├── services/                      # 业务逻辑
 │   ├── repositories/                  # 数据访问
 │   │
-│   ├── agents/                        # 6 个 Agent (零改动)
-│   │   ├── script_agent.py
-│   │   ├── character_agent.py
-│   │   ├── storyboard_agent.py
-│   │   ├── image_agent.py
-│   │   ├── voice_agent.py
-│   │   └── video_agent.py
+│   ├── agents/                        # 7 个 Agent (纯 API 调用)
+│   │   ├── script_agent.py            # 剧本生成 (LLM)
+│   │   ├── character_agent.py         # 角色视觉描述 (LLM)
+│   │   ├── storyboard_agent.py        # 分镜编排 (LLM)
+│   │   ├── image_agent.py             # 图片生成 (DashScope/DALL-E API)
+│   │   ├── image_to_video_agent.py    # 图生视频 (Kling/Runway API)
+│   │   ├── voice_agent.py             # 配音合成 (DashScope TTS API)
+│   │   └── video_agent.py             # 视频合成 (FFmpeg)
 │   │
 │   ├── workflows/
 │   │   ├── state.py                   # StoryState TypedDict
 │   │   ├── runtime_workflow.py        # Runtime 执行入口
-│   │   ├── comic.yaml                 # 漫剧 Workflow DSL
+│   │   ├── comic.yaml                 # 漫剧 Workflow DSL (7 步)
 │   │   └── novel.yaml                 # 小说 Workflow DSL
 │   │
-│   ├── tools/                         # ComfyUI / CosyVoice / FFmpeg
 │   ├── tasks/
-│   │   └── runner.py                  # 任务运行器 (Runtime only)
+│   │   └── runner.py                  # 任务运行器
 │   ├── app/                           # Database / Redis / LLM
+│   ├── prompts/                       # Prompt 模板
 │   ├── utils/                         # 工具函数
 │   │
-│   └── runtime/                       # Runtime 核心
-│       ├── __init__.py                # 统一导出
+│   └── runtime/                       # ★ Runtime 核心
 │       ├── core.py                    # StoryFlowRuntime 主入口
-│       ├── event_bus.py               # EventBus (异步 pub/sub, 13 种事件)
-│       ├── blackboard.py              # Blackboard (共享状态, 点号路径)
-│       ├── artifact_manager.py        # ArtifactManager (文件化 + 检查点)
-│       ├── session_manager.py         # SessionManager (会话 + 部分重生成)
-│       ├── hooks.py                   # HookFramework (Before/After/Error)
-│       ├── workflow_engine.py         # WorkflowEngine (DSL + 并行 + Hook)
-│       ├── director.py                # DirectorAgent (决策: retry/rollback/skip)
-│       ├── planner.py                 # PlannerAgent (任务 DAG 拆解)
+│       ├── event_bus.py               # EventBus (13 种事件)
+│       ├── blackboard.py              # Blackboard (点号路径)
+│       ├── artifact_manager.py        # ArtifactManager (Checkpoint)
+│       ├── session_manager.py         # SessionManager (部分重生成)
+│       ├── hooks.py                   # HookFramework
+│       ├── workflow_engine.py         # WorkflowEngine (DSL + 并行)
+│       ├── director.py                # DirectorAgent (决策)
+│       ├── planner.py                 # PlannerAgent (任务 DAG)
 │       ├── agent_sdk.py               # BaseAgent + AgentRegistry
 │       ├── quality/                   # QualityEngine (6 种 Checker)
-│       │   └── __init__.py
-│       └── adapters/                  # Model Adapters (可插拔)
+│       └── adapters/                  # 5 类 Adapter (纯云端 API)
 │           └── __init__.py
 │
 ├── frontend/                          # React 18 + TypeScript + Ant Design 5
@@ -244,12 +248,15 @@ storyflow-ai/
 │           └── ResultPage.tsx
 │
 ├── deploy/
-│   ├── docker-compose.yml
+│   ├── docker-compose.yml             # PostgreSQL + Redis
 │   ├── nginx/default.conf
 │   └── init.sql
 │
-└── scripts/
-    └── init_db.py
+├── scripts/
+│   └── init_db.py
+│
+├── README.md                          # 本文档
+└── 项目介绍.md                        # 详细技术文档
 ```
 
 ## 快速开始
@@ -258,11 +265,9 @@ storyflow-ai/
 
 - Python 3.11+
 - Node.js 18+
-- Docker & Docker Compose (可选)
-- FFmpeg
-- OpenAI 兼容 LLM API（GPT-4o / Qwen / DeepSeek 等）
-- ComfyUI 或其他 SDXL 服务（图片生成）
-- CosyVoice 或其他 TTS 服务（语音合成）
+- FFmpeg（视频合成）
+- Docker & Docker Compose（可选，用于 PostgreSQL + Redis）
+- **只需一个 LLM API Key 即可跑通全流程**（图片/视频/语音未配置时自动 Mock 降级）
 
 ### 方式一：本地开发
 
@@ -272,7 +277,7 @@ cd storyflow-ai
 
 # 配置
 cp deploy/.env.example backend/.env
-# 编辑 backend/.env，填入 LLM_API_KEY 等
+# 编辑 backend/.env，至少填入 LLM_API_KEY
 
 # 基础服务
 cd deploy && docker compose up -d postgres redis && cd ..
@@ -300,7 +305,7 @@ docker compose up -d
 | http://localhost:8000/docs | Swagger API |
 | http://localhost:8000/health | 健康检查 |
 
-## Agent 工作流
+## 7 个 Agent 工作流
 
 ```
 用户创意 (prompt + genre)
@@ -325,24 +330,40 @@ docker compose up -d
 └────────┬─────────┘
          ▼
 ┌──────────────────┐
-│  Image Agent     │  ComfyUI 逐镜生成
-│  随机 seed/镜    │  SDXL 1024x1024
-│  2x 重试/镜      │  部分失败 → image_partial
-└────────┬─────────┘
-         ▼ (可并行)
-┌──────────────────┐
-│  Voice Agent     │  CosyVoice 逐镜配音
-│  性别→音色映射   │  base64/URL 双格式
-│  部分容错        │
+│  Image Agent     │  云端 API 逐镜生成
+│  DashScope/DALL-E│  异步任务 + 轮询 + 下载
+│  自动 Mock 降级  │  部分失败 → image_partial
 └────────┬─────────┘
          ▼
 ┌──────────────────┐
-│  Video Agent     │  FFmpeg 合成
-│                  │  1. 图片+音频 → 逐场景视频 (记录实际时长)
-│                  │  2. ASS 字幕 (基于实际视频时长)
-│                  │  3. 字幕烧录 → concat 拼接 → story.mp4
+│ Image-to-Video   │  图片 → 动态视频片段
+│  Kling / Runway  │  base64 提交 + 异步轮询
+│  FFmpeg Mock 降级│  部分失败 → i2v_partial
+└────────┬─────────┘
+         ▼ (可与上方并行)
+┌──────────────────┐
+│  Voice Agent     │  云端 TTS 逐镜配音
+│  DashScope TTS   │  性别→音色自动映射
+│  自动 Mock 降级  │  部分容错
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│  Video Agent     │  FFmpeg 合成最终视频
+│                  │  1. 视频片段 + 配音合并
+│                  │  2. ASS 字幕烧录
+│                  │  3. Concat 拼接 → story.mp4
 └──────────────────┘
 ```
+
+### 5 种预置管线
+
+| 类型 | 步骤 |
+|------|------|
+| `comic`（漫剧） | script → character → storyboard → image → **image_to_video** → voice → video |
+| `novel`（小说） | script → character → chapter_outline → text_generation |
+| `animation`（动画） | script → character → storyboard → image → **image_to_video** → voice → video |
+| `ad`（广告） | script → storyboard → image → **image_to_video** → voice → video |
+| `movie`（电影） | script → character → storyboard → image → **image_to_video** → voice → video |
 
 ## 数据库设计
 
@@ -363,11 +384,20 @@ task           ─── 任务 (status, progress, current_step, error_message)
 | `LLM_API_KEY` | — | LLM API Key (**必填**) |
 | `LLM_MODEL` | `gpt-4o` | 模型名称 |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API 地址 |
-| `COMFYUI_URL` | `http://localhost:8188` | ComfyUI |
-| `COSYVOICE_URL` | `http://localhost:50000` | CosyVoice |
 | `DATABASE_URL` | `postgresql+asyncpg://...` | PostgreSQL |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis |
 | `STORAGE_PATH` | `./storage` | 文件存储 |
+
+### 云端 API 配置（全部可选，未配置自动 Mock 降级）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `IMAGE_API_PROVIDER` | `dashscope` | 图片后端 (`dashscope` / `openai` / `mock`) |
+| `IMAGE_API_KEY` | `''` | 图片 API Key |
+| `I2V_API_PROVIDER` | `kling` | 图生视频后端 (`kling` / `runway` / `mock`) |
+| `I2V_API_KEY` | `''` | 图生视频 API Key |
+| `VOICE_API_PROVIDER` | `dashscope_tts` | TTS 后端 (`dashscope_tts` / `mock`) |
+| `VOICE_API_KEY` | `''` | TTS API Key |
 
 ### Runtime 配置
 
@@ -375,10 +405,16 @@ task           ─── 任务 (status, progress, current_step, error_message)
 |------|--------|------|
 | `ENABLE_QUALITY` | `true` | 启用质量检查 |
 | `ENABLE_DIRECTOR` | `false` | 启用 Director 自动决策 |
-| `IMAGE_API_PROVIDER` | `comfyui` | 图片后端 (`comfyui` / `mock`) |
-| `VOICE_API_PROVIDER` | `cosyvoice` | 语音后端 (`cosyvoice` / `mock`) |
-| `VIDEO_API_PROVIDER` | `ffmpeg` | 视频后端 (`ffmpeg` / `mock`) |
-| `ARTIFACT_PATH` | `./artifacts` | 中间产物存储目录 |
+| `MAX_EPISODES` | `6` | 最大集数 |
+| `SCENES_PER_EPISODE` | `(5, 10)` | 每集场景数范围 |
+
+### Mock 降级策略
+
+| 未配置的服务 | 降级行为 |
+|-------------|----------|
+| 图片 API | 彩色占位 PNG（6 色轮转） |
+| 图生视频 API | FFmpeg 静态图转视频片段 |
+| TTS API | 静默 WAV 文件 |
 
 ## API 接口
 
@@ -389,7 +425,11 @@ task           ─── 任务 (status, progress, current_step, error_message)
 | `POST` | `/api/runtime/session/{id}/rerun/{step}` | 部分重生成 |
 | `POST` | `/api/story/` | 创建故事 |
 | `GET` | `/api/story/{id}` | 获取故事详情 |
-| `POST` | `/api/task/generate` | 触发生成任务 |
+| `POST` | `/api/story/{id}/generate` | 触发生成管线 |
+| `GET` | `/api/story/{id}/result` | 获取生成结果 |
+| `GET` | `/api/story/{id}/world` | 查看 Session 状态快照 |
+| `POST` | `/api/story/{id}/patch` | 修改角色属性 |
+| `GET` | `/api/story/{id}/checkpoints` | 列出所有 Checkpoint |
 | `WS` | `/api/task/{id}/ws` | 实时进度推送 |
 
 ## License

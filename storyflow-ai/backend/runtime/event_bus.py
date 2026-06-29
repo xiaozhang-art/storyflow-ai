@@ -57,6 +57,13 @@ class EventType(str, Enum):
     PLAN_CREATED = "plan.created"
     PLAN_UPDATED = "plan.updated"
 
+    # V1.5 Runtime events
+    REFLECTION_COMPLETED = "reflection.completed"
+    AGENT_MESSAGE = "agent.message"
+    CONVERSATION_STARTED = "conversation.started"
+    MODEL_ROUTED = "model.routed"
+    PROMPT_BUILT = "prompt.built"
+
 
 @dataclass
 class Event:

@@ -12,7 +12,12 @@ Architecture:
     ├── PlannerAgent    - Task decomposition into DAG
     ├── QualityEngine   - Multi-dimensional quality checking
     ├── AdapterRegistry - Pluggable model backends (LLM/Image/Voice/Video)
-    └── AgentRegistry   - Agent discovery + BaseAgent SDK
+    ├── AgentRegistry   - Agent discovery + BaseAgent SDK
+    ├── ReflectionRuntime - Post-step analysis (good/bad/suggestion)
+    ├── PromptRuntime   - Dynamic prompt construction
+    ├── MemoryGraph      - Timeline-aware graph memory
+    ├── AgentConversationBus - Inter-agent discussion
+    └── ModelRouter      - Intelligent model selection
 
 Usage:
     runtime = StoryFlowRuntime()
@@ -48,6 +53,13 @@ from runtime.retry_engine import RetryEngine, RetryPolicy, RetryAction, RetryRes
 from runtime.memory import MemoryRuntime, get_memory_runtime
 from runtime.trace import TraceRuntime, Span, TraceTree, get_trace_runtime
 
+# V1.5 Runtime Upgrades
+from runtime.reflection import ReflectionRuntime, ReflectionResult
+from runtime.prompt_runtime import PromptRuntime
+from runtime.memory.graph import MemoryGraph, MemoryNode, MemoryEdge
+from runtime.agent_conversation import AgentConversationBus, AgentMessage, MessageType
+from runtime.model_router import ModelRouter, ModelRoute
+
 # Extensibility
 from runtime.adapters import AdapterRegistry
 from runtime.agent_sdk import BaseAgent, AgentRegistry, get_agent_registry
@@ -71,6 +83,12 @@ __all__ = [
     "RetryEngine", "RetryPolicy", "RetryAction", "RetryResult",
     "MemoryRuntime", "get_memory_runtime",
     "TraceRuntime", "Span", "TraceTree", "get_trace_runtime",
+    # V1.5 Runtime Upgrades
+    "ReflectionRuntime", "ReflectionResult",
+    "PromptRuntime",
+    "MemoryGraph", "MemoryNode", "MemoryEdge",
+    "AgentConversationBus", "AgentMessage", "MessageType",
+    "ModelRouter", "ModelRoute",
     # Extensibility
     "AdapterRegistry",
     "BaseAgent", "AgentRegistry", "get_agent_registry",

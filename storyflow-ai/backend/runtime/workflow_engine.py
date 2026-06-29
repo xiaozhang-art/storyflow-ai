@@ -156,6 +156,9 @@ class WorkflowEngine:
         retry_engine: RetryEngine | None = None,
         memory: MemoryRuntime | None = None,
         trace: TraceRuntime | None = None,
+        reflection: Any | None = None,
+        prompt_runtime: Any | None = None,
+        memory_graph: Any | None = None,
         max_retries: int = 3,
     ):
         self.event_bus = event_bus or EventBus()
@@ -167,6 +170,9 @@ class WorkflowEngine:
         self.retry_engine = retry_engine or RetryEngine()
         self.memory = memory or MemoryRuntime()
         self.trace = trace or TraceRuntime()
+        self.reflection = reflection
+        self.prompt_runtime = prompt_runtime
+        self.memory_graph = memory_graph
         self.max_retries = max_retries
 
         # Registry: step_name → agent function
@@ -547,6 +553,48 @@ class WorkflowEngine:
                 self.memory.populate_from_state(result)
                 self.memory.session.step_name = step_name
                 self.memory.session.attempt = attempt
+
+                # V1.5: Populate MemoryGraph from step results
+                if self.memory_graph:
+                    try:
+                        if step_name == "script":
+                            self.memory_graph.populate_from_script(result)
+                        elif step_name == "character":
+                            self.memory_graph.populate_from_character_update(result)
+                        elif step_name == "storyboard":
+                            self.memory_graph.populate_from_storyboard(result)
+                    except Exception as mg_err:
+                        logger.debug("MemoryGraph populate error: %s", mg_err)
+
+                # V1.5: Run Reflection after step completes
+                if self.reflection and self.reflection.enabled:
+                    try:
+                        reflection_result = await self.reflection.reflect(
+                            step_name=step_name,
+                            result=result,
+                            state=state,
+                            session_id=session_id,
+                            quality_result=qr if 'qr' in dir() else None,
+                        )
+                        # Store reflection on blackboard for downstream steps
+                        blackboard.set(
+                            f"reflections.{step_name}",
+                            reflection_result.to_dict(),
+                        )
+                        # If reflection has suggestions, inject into
+                        # PromptRuntime for the next step
+                        if (self.prompt_runtime
+                                and reflection_result.suggestion):
+                            next_step_suggestions = (
+                                reflection_result.get_suggestions_text()
+                            )
+                            self.prompt_runtime.set_director_instruction(
+                                step_name, next_step_suggestions
+                            )
+                    except Exception as ref_err:
+                        logger.debug(
+                            "Reflection error for '%s': %s",
+                            step_name, ref_err)
 
                 # End trace span
                 if step_span:

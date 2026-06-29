@@ -7,11 +7,18 @@ This is the main entry point for the Runtime. It assembles:
     - ArtifactManager (file storage)
     - SessionManager (session tracking)
     - HookFramework (cross-cutting concerns)
-    - DirectorAgent (decision making)
-    - PlannerAgent (task decomposition)
+    - DirectorAgent (LLM-powered root cause diagnosis)
+    - PlannerAgent (task decomposition + dynamic workflow)
     - QualityEngine (quality validation)
     - AdapterRegistry (pluggable models)
     - AgentRegistry (agent discovery)
+
+V1.5 Runtime Upgrades:
+    - ReflectionRuntime (post-step analysis: good/bad/suggestion)
+    - PromptRuntime (dynamic prompt construction)
+    - MemoryGraph (timeline-aware character state)
+    - AgentConversationBus (inter-agent discussion)
+    - ModelRouter (intelligent model selection)
 
 Usage:
     runtime = StoryFlowRuntime()
@@ -40,6 +47,13 @@ from runtime.retry_engine import RetryEngine
 from runtime.memory import MemoryRuntime
 from runtime.trace import TraceRuntime, get_trace_runtime
 from runtime.agent_sdk import AgentRegistry, get_agent_registry
+
+# V1.5 Runtime Upgrades
+from runtime.reflection import ReflectionRuntime
+from runtime.prompt_runtime import PromptRuntime
+from runtime.memory.graph import MemoryGraph
+from runtime.agent_conversation import AgentConversationBus
+from runtime.model_router import ModelRouter
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +90,19 @@ class StoryFlowRuntime:
         self.memory = MemoryRuntime()
         self.trace = get_trace_runtime()
 
+        # V1.5 New Subsystems
+        self.reflection = ReflectionRuntime(
+            event_bus=self.event_bus, enabled=True, use_llm=True)
+        self.prompt_runtime = PromptRuntime(
+            memory=self.memory,
+            reflection=self.reflection,
+            event_bus=self.event_bus,
+        )
+        self.memory_graph = MemoryGraph()
+        self.conversation_bus = AgentConversationBus(
+            event_bus=self.event_bus)
+        self.model_router = ModelRouter()
+
         # Execution (depends on all above)
         self.workflow_engine = WorkflowEngine(
             event_bus=self.event_bus,
@@ -87,10 +114,13 @@ class StoryFlowRuntime:
             retry_engine=self.retry_engine,
             memory=self.memory,
             trace=self.trace,
+            reflection=self.reflection,
+            prompt_runtime=self.prompt_runtime,
+            memory_graph=self.memory_graph,
             max_retries=max_retries,
         )
 
-        logger.info("StoryFlow Runtime V3 initialized")
+        logger.info("StoryFlow Runtime V4.0 initialized (with V1.5 Runtime upgrades)")
 
     def register_existing_agents(self):
         """Register all 7 agents with the Runtime."""
@@ -222,7 +252,7 @@ class StoryFlowRuntime:
     def get_stats(self) -> dict:
         """Get comprehensive Runtime statistics."""
         return {
-            "version": "3.5.0",
+            "version": "4.0.0",
             "workflow_engine": self.workflow_engine.get_stats(),
             "session_manager": self.session_manager.get_stats(),
             "director": self.director.get_stats(),
@@ -231,6 +261,11 @@ class StoryFlowRuntime:
             "retry_engine": self.retry_engine.get_stats(),
             "memory": self.memory.get_stats(),
             "trace": self.trace.get_stats(),
+            "reflection": self.reflection.get_stats(),
+            "prompt_runtime": self.prompt_runtime.get_stats(),
+            "memory_graph": self.memory_graph.get_stats(),
+            "conversation_bus": self.conversation_bus.get_stats(),
+            "model_router": self.model_router.get_stats(),
             "adapters": self.adapter_registry.list_adapters(),
             "agent_registry": self.agent_registry.get_stats(),
         }

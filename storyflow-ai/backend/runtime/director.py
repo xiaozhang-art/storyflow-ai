@@ -175,10 +175,81 @@ class DirectorAgent:
         """Review a completed step's result and optionally intervene.
 
         V2: Simple rule-based checks
-        V3+: Could use LLM for deeper analysis
+        V3.5: Uses LLM for deeper analysis when available
         """
-        # V2: No automatic intervention on successful steps
-        # The quality engine (V3) handles post-step validation
+        # Try LLM-powered review if reflection data is available
+        try:
+            from runtime.reflection import get_reflection_runtime
+            reflection_rt = get_reflection_runtime()
+            ref = reflection_rt.get_reflection(session_id, step)
+            if ref and ref.score < 0.5 and ref.bad:
+                # Low reflection score + issues → consider intervention
+                decision = await self._llm_root_cause_analysis(
+                    step, ref, session_id
+                )
+                if decision and decision.type != DecisionType.CONTINUE:
+                    return decision
+        except Exception:
+            pass  # Fall through to V2 behavior
+
+        return None
+
+    async def _llm_root_cause_analysis(
+        self, step: str, reflection: Any, session_id: str
+    ) -> Decision | None:
+        """Use LLM to diagnose the root cause of a quality issue.
+
+        This is the V3.5 Director: instead of "Image retry N times",
+        it finds the root cause and points to the correct Agent.
+        """
+        try:
+            from app.llm import get_precise_llm
+            llm = get_precise_llm()
+
+            prompt = (
+                f"A pipeline step '{step}' produced low-quality output.\n"
+                f"Reflection analysis:\n"
+                f"  Good: {reflection.good}\n"
+                f"  Bad: {reflection.bad}\n"
+                f"  Suggestions: {reflection.suggestion}\n"
+                f"  Score: {reflection.score}\n\n"
+                f"Diagnose the root cause. Which upstream step is responsible?\n"
+                f"Options: script, character, storyboard, image, voice, video, "
+                f"or the step itself ({step}).\n"
+                f"Respond in JSON: {{\"root_cause_step\": \"...\", "
+                f"\"reason\": \"...\", \"action\": \"retry|rollback|continue\"}}"
+            )
+
+            response = await llm.ainvoke(prompt)
+            text = response.content if hasattr(response, "content") else str(response)
+
+            import json, re
+            match = re.search(r'\{[^{}]+\}', text, re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+                root_step = data.get("root_cause_step", step)
+                reason = data.get("reason", "")
+                action = data.get("action", "retry")
+
+                if action == "rollback" and root_step != step:
+                    return Decision(
+                        type=DecisionType.ROLLBACK,
+                        step=step,
+                        target_step=root_step,
+                        reason=f"LLM root cause: {reason}. "
+                               f"Root cause in '{root_step}', not '{step}'.",
+                        confidence=0.7,
+                    )
+                elif action == "retry":
+                    return Decision(
+                        type=DecisionType.RETRY,
+                        step=step,
+                        reason=f"LLM diagnosis: {reason}",
+                        confidence=0.7,
+                    )
+        except Exception as e:
+            logger.debug("Director LLM analysis failed: %s", e)
+
         return None
 
     async def decide_on_error(self, step: str, error: Exception,

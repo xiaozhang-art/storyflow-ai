@@ -269,3 +269,84 @@ class PlannerAgent:
         return {
             "known_pipelines": list(self.KNOWN_PIPELINES.keys()),
         }
+
+    async def plan_dynamic(self, prompt: str, genre: str = "campus",
+                            metadata: dict | None = None) -> ExecutionPlan:
+        """V1.5: LLM-powered dynamic workflow generation.
+
+        Analyzes story characteristics and generates a custom pipeline.
+        For example:
+        - Very long story → add summary_agent step
+        - Many characters → add character_review step
+        - Battle scenes → add action_choreography step
+        """
+        meta = metadata or {}
+        base_pipeline = list(self.KNOWN_PIPELINES.get(
+            meta.get("task_type", "comic"), self.KNOWN_PIPELINES["comic"]))
+
+        # Try LLM-based analysis
+        try:
+            from app.llm import get_creative_llm
+            llm = get_creative_llm()
+
+            analysis_prompt = (
+                f"Analyze this story request and suggest workflow modifications.\n"
+                f"Prompt: {prompt}\n"
+                f"Genre: {genre}\n"
+                f"Current pipeline: {base_pipeline}\n\n"
+                f"Consider:\n"
+                f"- If the story is very long (many episodes), suggest adding a 'summary' step\n"
+                f"- If many characters, suggest adding 'character_review' step\n"
+                f"- Base pipeline already has: {base_pipeline}\n\n"
+                f"Respond in JSON:\n"
+                f"{{\"add_steps\": [{{\"name\": \"...\", \"after\": \"...\", "
+                f"\"reason\": \"...\"}}], \"remove_steps\": [], "
+                f"\"parallel_groups\": []}}\n"
+                f"If no changes needed, return empty arrays."
+            )
+
+            response = await llm.ainvoke(analysis_prompt)
+            text = response.content if hasattr(response, "content") else str(response)
+
+            import re
+            match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+            if match:
+                import json
+                data = json.loads(match.group())
+                add_steps = data.get("add_steps", [])
+
+                for step_info in add_steps:
+                    step_name = step_info.get("name", "")
+                    after = step_info.get("after", "")
+                    reason = step_info.get("reason", "")
+                    if step_name and after and after in base_pipeline:
+                        idx = base_pipeline.index(after) + 1
+                        base_pipeline.insert(idx, step_name)
+                        logger.info(
+                            "Planner dynamic: added '%s' after '%s' (%s)",
+                            step_name, after, reason)
+
+        except Exception as e:
+            logger.debug("Planner dynamic LLM analysis failed: %s", e)
+
+        # Build plan with (possibly modified) pipeline
+        tasks = self._build_task_dag(base_pipeline, prompt, genre, meta)
+        plan = ExecutionPlan(
+            user_request=prompt,
+            genre=genre,
+            tasks=tasks,
+            metadata={
+                "task_type": meta.get("task_type", "comic"),
+                "pipeline": base_pipeline,
+                "dynamic": True,
+                **meta,
+            },
+        )
+
+        await self.event_bus.publish_event(
+            EventType.PLAN_CREATED,
+            data=plan.to_dict(),
+            source="planner",
+        )
+
+        return plan

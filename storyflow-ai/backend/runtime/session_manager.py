@@ -15,6 +15,8 @@ Example:
     session_manager.reset_from_step(session.id, "storyboard")
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import time

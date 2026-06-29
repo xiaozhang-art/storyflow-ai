@@ -12,6 +12,8 @@ V3: Full Quality Engine with multiple checkers
     - ConsistencyChecker: Cross-artifact consistency
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os

@@ -1,0 +1,22 @@
+{
+  "storyboard": [
+    {
+      "scene_no": 1,
+      "prompt": "girl in forest",
+      "camera": "wide",
+      "duration": 5,
+      "dialogue": "",
+      "characters": [
+        "Lin Xiao"
+      ]
+    },
+    {
+      "scene_no": 2,
+      "prompt": "dragon on rock",
+      "camera": "close-up",
+      "duration": 4,
+      "dialogue": "",
+      "characters": []
+    }
+  ]
+}

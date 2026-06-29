@@ -1,0 +1,24 @@
+{
+  "outline": "A girl meets a dragon",
+  "characters": [
+    {
+      "name": "Lin Xiao",
+      "gender": "female",
+      "age": 16,
+      "appearance": {
+        "hair": "long black"
+      }
+    }
+  ],
+  "episodes": [
+    {
+      "episode_no": 1,
+      "title": "Encounter",
+      "summary": "Girl finds dragon",
+      "script": "LIN XIAO: A dragon!",
+      "characters": [
+        "Lin Xiao"
+      ]
+    }
+  ]
+}

@@ -13,6 +13,8 @@ Flow:
     Agent Step → Reflection → Quality → Director → Retry → Agent Step (improved)
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import time

@@ -21,6 +21,8 @@ Usage:
     # → Returns formatted string with relevant character appearances, world info
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 

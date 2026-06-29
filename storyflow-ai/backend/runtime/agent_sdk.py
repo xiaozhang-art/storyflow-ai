@@ -15,6 +15,8 @@ To add a new agent (e.g., MusicAgent), you only need:
     agent_registry.register(MusicAgent())
 """
 
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any

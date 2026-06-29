@@ -17,19 +17,54 @@ from configs.settings import settings
 logger = logging.getLogger(__name__)
 
 
+def _select_prompt(scene: dict, enriched_prompts: dict | None) -> tuple[str, bool]:
+    """Select the best prompt for a scene.
+
+    Priority:
+        1. Enriched prompt (from PromptRuntime + Reflection)
+        2. Original scene prompt
+
+    Returns:
+        (prompt_text, was_enriched)
+    """
+    scene_no = scene.get("scene_no", 0)
+    if enriched_prompts and scene_no in enriched_prompts:
+        return enriched_prompts[scene_no], True
+    return scene.get("prompt", ""), False
+
+
 async def image_agent(state: dict, context: dict) -> dict:
     """Image generation agent.
 
+    Generates images for each storyboard scene, using enriched prompts
+    when available (from PromptRuntime + ReflectionRuntime).
+
+    The agent looks for '_enriched_scene_prompts' in the state dict,
+    which is populated by WorkflowEngine._enrich_image_prompts().
+    Enriched prompts include:
+        - Character appearance constraints
+        - Reflection suggestions from previous steps (storyboard/character)
+        - World environment settings
+
     Args:
-        state: Pipeline state with storyboard, characters, story_id
+        state: Pipeline state with storyboard, characters, story_id,
+               and optionally '_enriched_scene_prompts' (scene_no → enriched prompt)
         context: Runtime context
 
     Returns:
-        dict with images list and status
+        dict with images list, status, and enrichment metadata
     """
     story_id = state.get("story_id", "unknown")
     storyboard = state.get("storyboard", [])
     characters = state.get("characters", [])
+
+    # V1.5: Check for enriched prompts from PromptRuntime + Reflection
+    enriched_prompts = state.get("_enriched_scene_prompts")
+    if enriched_prompts:
+        logger.info(
+            "image_agent received %d enriched prompts from PromptRuntime",
+            len(enriched_prompts),
+        )
 
     logger.info("image_agent started | story_id=%s, %d scenes", story_id, len(storyboard))
 
@@ -39,6 +74,7 @@ async def image_agent(state: dict, context: dict) -> dict:
 
     images: list[dict] = []
     errors: list[str] = []
+    enriched_count = 0
 
     save_dir = Path(settings.STORAGE_PATH) / "stories" / story_id / "images"
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -47,7 +83,16 @@ async def image_agent(state: dict, context: dict) -> dict:
 
     for scene in storyboard:
         scene_no = scene.get("scene_no", 0)
-        prompt_text = scene.get("prompt", "")
+
+        # V1.5: Use enriched prompt if available, fall back to original
+        prompt_text, was_enriched = _select_prompt(scene, enriched_prompts)
+        if was_enriched:
+            enriched_count += 1
+            logger.debug(
+                "Scene %d: using enriched prompt (%d chars, was %d chars)",
+                scene_no, len(prompt_text),
+                len(scene.get("prompt", "")),
+            )
 
         if not prompt_text:
             errors.append(f"Scene {scene_no}: empty prompt")
@@ -91,10 +136,23 @@ async def image_agent(state: dict, context: dict) -> dict:
         status = "image_partial"
         error_msg = f"Partial failures: {'; '.join(errors)}"
 
-    logger.info("image_agent completed | %d/%d images | status=%s | story_id=%s",
-                len(images), len(storyboard), status, story_id)
+    logger.info(
+        "image_agent completed | %d/%d images | status=%s | "
+        "enriched=%d/%d | story_id=%s",
+        len(images), len(storyboard), status,
+        enriched_count, len(storyboard), story_id,
+    )
 
-    return {"images": images, "status": status, "error": error_msg}
+    return {
+        "images": images,
+        "status": status,
+        "error": error_msg,
+        "enrichment": {
+            "scenes_total": len(storyboard),
+            "scenes_enriched": enriched_count,
+            "had_enriched_prompts": enriched_prompts is not None,
+        },
+    }
 
 
 def _make_image_entry(story_id: str, scene_no: int, image_path: str) -> dict:

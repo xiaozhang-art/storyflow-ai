@@ -133,6 +133,8 @@ steps:
 | **Execution 调度器** | ✅ 已实现 | LLM / Tool / GPU 线程池 |
 | **Langfuse 可观测性** | ✅ 已实现 | 配置即启用 |
 | **Quality Gate** | ✅ 已实现 | 6 Agent 专用校验器，不合格自动重试 |
+| **Reflection Runtime** | ✅ 已接入 | 每步执行后生成 good/bad/suggestion，注入 Image Agent prompt |
+| **Prompt Runtime** | ✅ 已接入 | 动态组合角色外观 + Reflection + 世界观 → enriched prompt |
 
 ## V1.5 迭代路线图
 
@@ -172,15 +174,46 @@ steps:
  Script  Character  Storyboard  Image  I2V  Voice  Video
 ```
 
-### 1. Reflection Runtime ⭐ 最重要
+### 1. Reflection Runtime ✅ 已接入 Image Agent
 
 **问题**：当前每个 Agent 执行完毕后直接结束，没有反思和反馈机制。产出的质量只能靠 Quality Gate 做简单校验，无法自我改进。
 
-**目标**：每一步 Agent 执行后，Reflection Runtime 自动总结该步骤的优劣，生成结构化反馈，注入到后续步骤中，让产出越来越精准。
+**状态**：Reflection Runtime 已完整实现并实际接入 Image Agent。每步执行后自动生成 good/bad/suggestion 结构化反馈，通过 PromptRuntime 注入到后续 Agent 的 prompt 中。
+
+**已实现的数据流**：
+```storyboard/character 步骤执行完毕
+    │
+    ▼
+Reflection Runtime (rule-based 或 LLM)
+    │
+    ├─ good:    ["3 scenes created"]
+    ├─ bad:     ["Scene prompts lack character appearance details"]
+    └─ suggestion: ["Add character hair and clothing to every scene prompt"]
+        │
+        ▼
+PromptRuntime.build_image_prompt()
+  → 将 suggestion + character appearance + world settings 注入 prompt
+        │
+        ▼
+WorkflowEngine._enrich_image_prompts()
+  → 为每个场景生成 enriched prompt
+        │
+        ▼
+Image Agent
+  → 优先使用 enriched prompt（含 reflection 建议）
+  → 返回 enrichment 元数据（enriched_count / total_count）
+```
+
+**集成测试**：19 个端到端测试全部通过，覆盖：
+- Reflection 生成 suggestion
+- PromptRuntime 注入 suggestion 到 prompt
+- WorkflowEngine 调用 PromptRuntime 生成 enriched prompt
+- Image Agent 读取并使用 enriched prompt
+- 完整 E2E 流程：script → character → storyboard → reflection → image(enriched)
 
 **机制**：
 ```
-Image Agent
+Image Agent (使用 enriched prompt)
     │
     ▼
 Reflection Runtime

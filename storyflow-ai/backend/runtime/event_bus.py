@@ -13,6 +13,8 @@ Events:
     - DirectorDecision(decision, reason, session_id)
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import time

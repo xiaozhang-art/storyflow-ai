@@ -1,0 +1,16 @@
+{
+  "characters": [
+    {
+      "name": "Lin Xiao",
+      "gender": "female",
+      "age": 16,
+      "personality": "brave",
+      "appearance": {
+        "hair": "long black hair with red ribbon",
+        "face": "round face with brown eyes",
+        "body": "slender petite",
+        "cloth": "white Chinese dress"
+      }
+    }
+  ]
+}

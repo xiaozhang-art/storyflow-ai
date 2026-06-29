@@ -1,0 +1,19 @@
+{
+  "images": [
+    {
+      "scene_no": 1,
+      "image_url": "/fake/1.png"
+    },
+    {
+      "scene_no": 2,
+      "image_url": "/fake/2.png"
+    }
+  ],
+  "status": "image_done",
+  "error": "",
+  "enrichment": {
+    "scenes_total": 2,
+    "scenes_enriched": 2,
+    "had_enriched_prompts": true
+  }
+}

@@ -22,6 +22,8 @@ Usage:
         return ErrorAction.RETRY  # or ErrorAction.ABORT, ErrorAction.CONTINUE
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from dataclasses import dataclass, field

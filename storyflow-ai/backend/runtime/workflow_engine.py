@@ -16,6 +16,8 @@ The WorkflowEngine is the core execution loop of the Runtime. It:
     5. Session tracking enables partial regeneration
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import traceback
@@ -505,6 +507,12 @@ class WorkflowEngine:
                 if memory_ctx:
                     agent_input["_memory_context"] = memory_ctx
 
+                # V1.5: Enrich prompts via PromptRuntime before calling agent
+                if self.prompt_runtime:
+                    agent_input = await self._enrich_agent_input(
+                        step_name, agent_input, session_id, blackboard
+                    )
+
                 logger.info("[Session %s] Executing step '%s' (attempt %d/%d)",
                             session_id, step_name, attempt, self.max_retries)
                 result = await agent_func(agent_input)
@@ -740,6 +748,153 @@ class WorkflowEngine:
             session_id=session_id,
             source="workflow_engine",
         )
+
+    async def _enrich_agent_input(
+        self,
+        step_name: str,
+        agent_input: dict,
+        session_id: str,
+        blackboard: "Blackboard",
+    ) -> dict:
+        """Enrich agent input using PromptRuntime + Reflection suggestions.
+
+        For the 'image' step, this builds an enriched prompt for each scene
+        by combining:
+            - The original scene prompt (from storyboard)
+            - Character appearance details (from Memory)
+            - Reflection suggestions from previous steps (storyboard, character)
+            - Director instructions
+
+        The enriched prompts are stored in agent_input['_enriched_scene_prompts']
+        as a dict mapping scene_no → enriched_prompt.
+
+        For other steps, the general PromptRuntime.build_prompt() is used
+        to enrich the '_memory_context' field.
+        """
+        if step_name == "image":
+            return await self._enrich_image_prompts(
+                agent_input, session_id, blackboard
+            )
+        elif step_name == "storyboard":
+            return await self._enrich_storyboard_input(
+                agent_input, session_id, blackboard
+            )
+        elif step_name == "character":
+            return await self._enrich_character_input(
+                agent_input, session_id, blackboard
+            )
+        return agent_input
+
+    async def _enrich_image_prompts(
+        self,
+        agent_input: dict,
+        session_id: str,
+        blackboard: "Blackboard",
+    ) -> dict:
+        """Build enriched prompts for each scene in the image step.
+
+        Uses PromptRuntime.build_image_prompt() which combines:
+            - Character appearance constraints
+            - Reflection suggestions from storyboard/character steps
+            - World environment settings
+            - The original scene prompt
+        """
+        storyboard = agent_input.get("storyboard", [])
+        if not storyboard:
+            return agent_input
+
+        # Extract character names from storyboard scenes
+        all_char_names: list[str] = []
+        characters = agent_input.get("characters", [])
+        if characters:
+            all_char_names = [c.get("name", "") for c in characters if c.get("name")]
+
+        # Also pick up names mentioned in scenes
+        for scene in storyboard:
+            for name in scene.get("characters", []):
+                if isinstance(name, str) and name not in all_char_names:
+                    all_char_names.append(name)
+
+        enriched_prompts: dict[int, str] = {}
+        for scene in storyboard:
+            scene_no = scene.get("scene_no", 0)
+            original_prompt = scene.get("prompt", "")
+            if not original_prompt:
+                continue
+
+            enriched = self.prompt_runtime.build_image_prompt(
+                scene_prompt=original_prompt,
+                character_names=all_char_names,
+                state=agent_input,
+                session_id=session_id,
+            )
+            enriched_prompts[scene_no] = enriched
+
+        if enriched_prompts:
+            agent_input["_enriched_scene_prompts"] = enriched_prompts
+            logger.info(
+                "[Session %s] PromptRuntime enriched %d scene prompts "
+                "(reflection-aware)",
+                session_id, len(enriched_prompts),
+            )
+
+            # Publish event for observability
+            await self.event_bus.publish_event(
+                EventType.PROMPT_BUILT,
+                data={
+                    "step": "image",
+                    "scenes_enriched": list(enriched_prompts.keys()),
+                },
+                session_id=session_id,
+                source="workflow_engine",
+            )
+
+        return agent_input
+
+    async def _enrich_storyboard_input(
+        self,
+        agent_input: dict,
+        session_id: str,
+        blackboard: "Blackboard",
+    ) -> dict:
+        """Enrich storyboard agent input with reflection suggestions."""
+        if not self.prompt_runtime.reflection:
+            return agent_input
+
+        accumulated = self.prompt_runtime.reflection.get_accumulated_context(
+            session_id
+        )
+        if accumulated:
+            agent_input["_reflection_context"] = accumulated
+            logger.info(
+                "[Session %s] Injected reflection context into "
+                "storyboard input (%d chars)",
+                session_id, len(accumulated),
+            )
+        return agent_input
+
+    async def _enrich_character_input(
+        self,
+        agent_input: dict,
+        session_id: str,
+        blackboard: "Blackboard",
+    ) -> dict:
+        """Enrich character agent input with reflection suggestions."""
+        if not self.prompt_runtime.reflection:
+            return agent_input
+
+        # Get script reflection specifically (character step follows script)
+        script_ref = self.prompt_runtime.reflection.get_reflection(
+            session_id, "script"
+        )
+        if script_ref and script_ref.suggestion:
+            agent_input["_reflection_suggestions"] = script_ref.suggestion
+            logger.info(
+                "[Session %s] Injected %d script reflection suggestions "
+                "into character input",
+                session_id, len(script_ref.suggestion),
+            )
+        return agent_input
 
     def get_stats(self) -> dict:
         """Get workflow engine statistics."""

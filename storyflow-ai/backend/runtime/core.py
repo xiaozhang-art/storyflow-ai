@@ -31,6 +31,8 @@ Usage:
     result = await runtime.rerun_step(session.id, "image")
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 

@@ -188,7 +188,12 @@ class I2VAdapter(BaseAdapter):
 
 
 class VideoAdapter(BaseAdapter):
-    """Adapter for video compositing (FFmpeg concat, always local)."""
+    """Adapter for video compositing (Montage Engine / FFmpeg).
+
+    Uses the Montage VideoComposer for professional-grade assembly
+    (transitions, subtitle burn, audio ducking, quality checks).
+    Falls back to legacy FFmpeg concat if Montage is unavailable.
+    """
 
     name = "video"
 
@@ -200,7 +205,52 @@ class VideoAdapter(BaseAdapter):
 
     async def health_check(self) -> bool:
         import shutil
-        return shutil.which("ffmpeg") is not None
+        ffmpeg_ok = shutil.which("ffmpeg") is not None
+        if not ffmpeg_ok:
+            return False
+        # Also check Montage availability
+        try:
+            from runtime.montage_adapter import MontageAdapter
+            adapter = MontageAdapter()
+            health = adapter.health_check()
+            return health.get("ffmpeg", False)
+        except Exception:
+            return True  # At least ffmpeg works
+
+
+class MontageAdapterType(BaseAdapter):
+    """Adapter exposing the Montage rendering engine as a pluggable backend."""
+
+    name = "montage"
+
+    async def generate(self, **kwargs) -> dict:
+        from runtime.montage_adapter import MontageAdapter
+        adapter = MontageAdapter()
+        operation = kwargs.get("operation", "compose_video")
+        state = kwargs.get("state", {})
+
+        if operation == "compose_video":
+            return adapter.compose_video(state)
+        elif operation == "generate_voices":
+            return {"audios": adapter.generate_voices(state)}
+        elif operation == "mix_audio":
+            return adapter.mix_audio(state)
+        elif operation == "generate_subtitles":
+            path = adapter.generate_subtitles(state)
+            return {"subtitle_path": path}
+        elif operation == "health_check":
+            return adapter.health_check()
+        else:
+            return {"error": f"Unknown montage operation: {operation}"}
+
+    async def health_check(self) -> bool:
+        try:
+            from runtime.montage_adapter import MontageAdapter
+            adapter = MontageAdapter()
+            health = adapter.health_check()
+            return all(health.values())
+        except Exception:
+            return False
 
 
 class AdapterRegistry:
@@ -216,6 +266,7 @@ class AdapterRegistry:
         self._adapters["voice"] = VoiceAdapter()
         self._adapters["image_to_video"] = I2VAdapter()
         self._adapters["video"] = VideoAdapter()
+        self._adapters["montage"] = MontageAdapterType()
 
     def get(self, adapter_type: str) -> BaseAdapter:
         adapter = self._adapters.get(adapter_type)

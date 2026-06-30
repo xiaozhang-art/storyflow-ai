@@ -55,6 +55,18 @@ class Settings(BaseSettings):
     VOICE_MODEL: str = "cosyvoice-v1-25hz"
     VOICE_SAMPLE_RATE: int = 22050
 
+    # ── Montage Engine (OpenMontage integration) ──
+    MONTAGE_ENABLED: bool = True
+    MONTAGE_TTS_PROVIDER: str = "auto"  # "auto" / "openai" / "dashscope" / "elevenlabs" / "google" / "piper"
+    MONTAGE_TTS_PROVIDERS: str = ""  # comma-separated, e.g. "openai,dashscope,piper"
+    MONTAGE_TRANSITION: str = "crossfade"  # "cut" / "crossfade" / "fade"
+    MONTAGE_TRANSITION_DURATION: float = 0.5
+    MONTAGE_BURN_SUBTITLES: bool = True
+    MONTAGE_QUALITY_CHECK: bool = True
+    MONTAGE_BGM_PATH: str = ""  # Optional BGM file path
+    MONTAGE_OUTPUT_PROFILE: str = "storyflow_default"
+    MONTAGE_MEDIA_PROFILE: str = "storyflow_default"  # "youtube_landscape" / "tiktok" / "instagram_reels" / etc.
+
     # ── Storage ──
     STORAGE_PATH: str = "./storage"
 

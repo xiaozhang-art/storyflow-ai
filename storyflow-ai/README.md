@@ -61,14 +61,51 @@
 │                      Adapter Layer                          │
 │  ┌──────────┐  ┌───────────┐  ┌───────────┐  ┌──────────┐ │
 │  │   LLM    │  │  Image    │  │  Voice    │  │   I2V    │ │
-│  │(OpenAI兼容)│ │(DashScope)│  │(DashScope)│  │(Kling)  │ │
+│  │(OpenAI兼容)│ │(DashScope)│  │(Montage)  │  │(Kling)  │ │
 │  └──────────┘  └───────────┘  └───────────┘  └──────────┘ │
-│  ┌──────────┐  ┌───────────┐                               │
-│  │  Video   │  │ Mock 降级  │  ComfyUI (SDXL) 可选回退     │
-│  │ (FFmpeg) │  │           │                               │
-│  └──────────┘  └───────────┘                               │
+│  ┌──────────┐  ┌───────────┐  ┌───────────────────┐       │
+│  │  Video   │  │  Mock    │  │  Montage Engine   │       │
+│  │(Montage) │  │  降级    │  │ (OpenMontage 渲染) │       │
+│  └──────────┘  └───────────┘  └───────────────────┘       │
+└─────────────────────────────────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│              Montage Engine (渲染引擎层)                     │
+│                                                             │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │TTSEngine │  │Subtitle  │  │AudioMixer│  │  Video   │   │
+│  │多供应商TTS│  │Engine    │  │Ducking/  │  │Composer  │   │
+│  │          │  │SRT/VTT   │  │BGM/归一化│  │转场/字幕 │   │
+│  └──────────┘  └──────────┘  └──────────┘  │/音轨合成 │   │
+│                                              └──────────┘   │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐     │
+│  │FFmpegOps │  │ Quality  │  │   MediaProfiles      │     │
+│  │转码/裁切 │  │Checker   │  │ YouTube/TikTok/...    │     │
+│  │转场/探测 │  │7项检测   │  │ 10 种平台预设         │     │
+│  └──────────┘  └──────────┘  └──────────────────────┘     │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Montage Engine — OpenMontage 渲染引擎集成 ✅
+
+从 [OpenMontage](https://github.com/calesthio/OpenMontage) 提取的纯媒体渲染组件，作为 StoryFlow 的下层剪辑引擎。**分层解耦，互不侵入** — Montage Engine 不依赖任何 StoryFlow 业务逻辑，通过 MontageAdapter 单点桥接数据流。
+
+| 组件 | 来源 | 能力 |
+|------|------|------|
+| **TTSEngine** | OpenMontage tools/audio/ | 多供应商 TTS：OpenAI / ElevenLabs / Google / DashScope / Piper，自动降级 |
+| **SubtitleEngine** | OpenMontage tools/subtitle/ | SRT/VTT 字幕生成，词级时间轴对齐，自动断行 |
+| **FFmpegOps** | OpenMontage tools/video/ | 转码 / 裁切 / 转场(xfade) / 探测 / 静音注入 |
+| **AudioMixer** | OpenMontage tools/audio/ | 多轨混合 / sidechain ducking / BGM 分段配乐 / loudnorm 归一化 |
+| **VideoComposer** | OpenMontage tools/video/ | 转场拼接 + 字幕烧录 + 多音轨合成 + 统一转码 |
+| **QualityChecker** | OpenMontage video_compose | 7 项自动检测：探测 / 黑帧 / 音量 / 时长 / 分辨率 / 编码 / 文件大小 |
+| **MediaProfiles** | OpenMontage lib/media_profiles | 10 种平台预设：YouTube / TikTok / Instagram / LinkedIn / Cinematic |
+| **RenderQueue** | StoryFlow 新增 | 批量渲染队列，优先级排序，进度跟踪 |
+
+**升级效果：**
+
+- **Voice Agent** — 从单一 DashScope TTS 升级为 5 供应商自动选择，优先 OpenAI TTS (gpt-4o-mini-tts)，中文场景自动选 DashScope CosyVoice
+- **Video Agent** — 从基础 FFmpeg concat 升级为专业级合成：crossfade/fade-through-black 转场、SRT 字幕烧录、多轨音频 ducking、BGM 分段配乐、成片质量检测
+- **原有逻辑完全保留为 fallback** — `MONTAGE_ENABLED=False` 时自动降级为原始实现
 
 ### V1.5 Runtime 三阶段升级 ✅ 已完成
 
@@ -86,51 +123,23 @@ Director 重写为真正的"决策大脑"，读取 **全部管线产出物** (Ar
 | `REWRITE_PROMPT` | 用 LLM 重写当前步骤 prompt 后重试 |
 | `SKIP` | 跳过当前步骤 |
 
-Director prompt 包含：管线位置、全部产出物摘要、重试上下文、历史决策记录。无 LLM 时自动降级为规则引擎。ArtifactManager 跟踪所有管线输出并支持 rollback。
-
-Bug 修复：WorkflowEngine 正确处理 SKIP（推进管线索引，避免死循环）；持久性失败在 2 次重试后自动跳过。
-
 #### Phase 2: A2A 富上下文传递 ✅
 
-AgentConversationBus 升级为结构化富上下文（非纯文本摘要），A2A 消息携带：
-
-- 角色档案（Character Profiles）
-- 场景数据 + 角色-场景映射
-- 生成统计（Generation Stats）
-- 产出物引用（Artifact References）
-- 约束：模板约束（按转换类型）+ 动态约束（按状态，如角色一致性、集数检查）
-- 反馈：质量门禁错误、警告和修复建议
-
-WorkflowEngine 在每个步骤执行前自动将 A2A 消息注入 Agent 状态。
+AgentConversationBus 升级为结构化富上下文（非纯文本摘要），A2A 消息携带：角色档案、场景数据、生成统计、产出物引用、约束模板、质量反馈。
 
 #### Phase 3: StoryMemory 统一记忆系统 ✅
 
-全新 7 维记忆架构（Scene/Visual/Style/World + Character/Timeline），全部异步 API：
-
-| 维度 | 内容 |
-|------|------|
-| Scene Memory | 场景剧情、对话、过渡 |
-| Visual Memory | 角色外观、场景视觉描述 |
-| Style Memory | 叙事风格、镜头语言、节奏 |
-| World Memory | 世界观设定、规则、背景知识 |
-| Character Memory | 角色档案、性格、关系 |
-| Timeline Memory | 剧情时间线、事件顺序 |
-| Meta Memory | 生成统计、质量评分 |
-
-4 层记忆层级（Working / Session / Conversation / Long-term）支持 TTL 自动过期。MemoryGraph 提供时间线感知的角色状态追踪。WorkflowEngine 每步执行前自动查询并注入记忆上下文，执行后自动存储产出物。
+全新 7 维记忆架构（Scene/Visual/Style/World + Character/Timeline），4 层记忆层级（Working / Session / Conversation / Long-term）支持 TTL 自动过期。
 
 ### 核心设计
 
-- **Director 5-决策循环** — 每步执行后 Director 分析全部产出物，做出 PROCEED/RETRY/ROLLBACK/REWRITE_PROMPT/SKIP 决策，实现根因驱动的智能管线控制
-- **A2A 结构化消息** — Agent 间通过携带角色档案、场景数据、约束模板、质量反馈的结构化消息通信，而非纯文本摘要
+- **Director 5-决策循环** — 每步执行后 Director 分析全部产出物，做出 PROCEED/RETRY/ROLLBACK/REWRITE_PROMPT/SKIP 决策
+- **A2A 结构化消息** — Agent 间通过携带角色档案、场景数据、约束模板、质量反馈的结构化消息通信
+- **Montage 渲染引擎** — 专业级视频合成：转场 / ducking / BGM / 字幕 / 质量检测
 - **实时进度推送** — Redis PubSub + WebSocket，前端 7 步进度条实时更新
-- **数据库持久化** — 每个 Agent 完成后立即写入 PostgreSQL，WorkflowEngine 支持增量持久化
-- **容错与降级** — 图片/配音/视频 Agent 按场景粒度 try/catch，部分失败不中断整体流程；Adapter 层 Mock 降级
-- **自动重试** — Script/Character/Storyboard Agent 使用 tenacity 3 次指数退避重试；Image Agent 每张图最多 2 次重试；Director 持久性失败 2 次后 SKIP
-- **LLM 工厂模式** — `get_creative_llm()` (temp=0.8) / `get_precise_llm()` (temp=0.4) 按场景选用，实例缓存复用
-- **结构化输出** — Script/Character Agent 用 `PydanticOutputParser`；Storyboard Agent 双策略（Pydantic 优先 + JSON fallback）
-- **Prompt 外部化** — 所有 Agent Prompt 集中在 `prompts/` 模块，与 Agent 逻辑解耦；PromptRuntime 动态组装记忆+反思+指令
-- **零本地 GPU** — 全部使用云端 API（LLM/Image/Voice/I2V），ComfyUI 仅作可选本地回退
+- **容错与降级** — 多层降级：Montage → Legacy FFmpeg → Mock
+- **自动重试** — Script/Character/Storyboard Agent 使用 tenacity 3x；Director 持久性失败 2x 后 SKIP
+- **LLM 工厂模式** — `get_creative_llm()` / `get_precise_llm()` 按场景选用
 
 ## 技术栈
 
@@ -140,13 +149,15 @@ WorkflowEngine 在每个步骤执行前自动将 A2A 消息注入 Agent 状态�
 | **后端** | Python 3.11+, FastAPI, SQLAlchemy 2.0 (async), Pydantic 2.0 | 异步全栈 |
 | **Agent 框架** | LangChain, ChatOpenAI | 7-Agent 串行管线 |
 | **Runtime** | Agent OS Runtime V5.0 | Director / A2A / StoryMemory / Reflection / PromptRuntime / MemoryGraph / ModelRouter |
+| **渲染引擎** | Montage Engine (OpenMontage) | TTSEngine / SubtitleEngine / FFmpegOps / AudioMixer / VideoComposer / QualityChecker |
 | **数据库** | PostgreSQL 16 (asyncpg) | 故事 / 角色 / 场景 / 任务 |
 | **缓存** | Redis 7 | 任务状态 + PubSub |
 | **向量数据库** | Qdrant | 角色记忆检索 |
+| **LLM** | OpenAI 兼容 API (GPT-4o/Qwen/DeepSeek) | 多供应商路由 |
 | **图像生成** | DashScope (通义万相) / DALL-E 3 | ComfyUI (SDXL) 可选回退 |
-| **语音合成** | DashScope TTS (CosyVoice) | 男/女声自动映射 |
+| **语音合成** | OpenAI TTS / DashScope TTS / ElevenLabs / Google / Piper | Montage TTSEngine 自动选择 |
 | **图生视频** | Kling / Runway | 3-5 秒动态视频 |
-| **视频合成** | FFmpeg | 图片+音频→视频→字幕烧录→拼接 |
+| **视频合成** | FFmpeg + Montage VideoComposer | 转场 / 字幕 / ducking / BGM / 质量检测 |
 | **部署** | Docker Compose, Nginx | 一键部署 |
 
 ## 项目结构
@@ -154,116 +165,68 @@ WorkflowEngine 在每个步骤执行前自动将 A2A 消息注入 Agent 状态�
 ```
 storyflow-ai/
 ├── backend/
-│   ├── main.py                        # FastAPI 入口 (Runtime 初始化 + CORS + 路由)
-│   ├── core.py                        # V5.0 核心组装 (Director + WorkflowEngine + StoryMemory)
+│   ├── main.py                        # FastAPI 入口
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   │
 │   ├── configs/
-│   │   └── settings.py                # Pydantic Settings (含 Runtime 参数)
+│   │   └── settings.py                # Pydantic Settings (含 Montage 配置)
 │   │
-│   ├── prompts/                       # ⭐ 集中管理的 Prompt 模板
-│   │   └── __init__.py                # Script / Character / Storyboard prompts
+│   ├── prompts/                       # Prompt 模板
 │   │
 │   ├── models/                        # SQLAlchemy ORM
-│   │   ├── base.py
-│   │   ├── story.py
-│   │   ├── character.py
-│   │   ├── episode.py
-│   │   ├── scene.py                   # (prompt/camera/duration/dialogue/image/audio)
-│   │   └── task.py
-│   │
-│   ├── schemas/
-│   │   ├── story.py
-│   │   ├── agent.py
-│   │   └── task.py
-│   │
-│   ├── api/
-│   │   ├── story.py
-│   │   └── task.py
-│   │
-│   ├── services/
-│   │   └── story_service.py
-│   │
-│   ├── repositories/
-│   │   ├── story_repo.py
-│   │   └── task_repo.py
+│   ├── schemas/                       # Pydantic schemas
+│   ├── api/                           # FastAPI routers
+│   ├── services/                      # Business logic
+│   ├── repositories/                  # Data access
 │   │
 │   ├── agents/                        # ⭐ 7 个 AI Agent
-│   │   ├── script_agent.py            # 剧本 (tenacity 3x, PydanticOutputParser)
-│   │   ├── character_agent.py         # 角色视觉卡片 (AppearanceCard 强类型)
-│   │   ├── storyboard_agent.py        # 分镜 (双策略: Pydantic + JSON fallback)
-│   │   ├── image_agent.py             # 图片生成 (逐场景重试, 部分容错)
-│   │   ├── image_to_video_agent.py    # 图生视频 (Kling/Runway)
-│   │   ├── voice_agent.py             # 语音合成 (性别→音色, 部分容错)
-│   │   └── video_agent.py             # FFmpeg (实际时长对齐字幕, 烧录, 拼接)
+│   │   ├── script_agent.py
+│   │   ├── character_agent.py
+│   │   ├── storyboard_agent.py
+│   │   ├── image_agent.py
+│   │   ├── image_to_video_agent.py
+│   │   ├── voice_agent.py             # ✅ 升级: Montage TTSEngine (多供应商)
+│   │   └── video_agent.py             # ✅ 升级: Montage VideoComposer (转场/字幕/BGM)
 │   │
 │   ├── workflows/
-│   │   ├── state.py                   # StoryState TypedDict
-│   │   ├── story_workflow.py          # LangGraph 编排
-│   │   └── runtime_workflow.py        # V1.5 Runtime 适配层
-│   │
 │   ├── tools/
-│   │   ├── comfyui_client.py          # ComfyUI (可选本地回退)
-│   │   ├── cosyvoice_client.py        # CosyVoice TTS
-│   │   └── ffmpeg_tool.py
-│   │
-│   ├── adapters/                      # ⭐ 5 类 Adapter (LLM/Image/I2V/Voice/Video)
-│   │
 │   ├── tasks/
-│   │   └── runner.py                  # 任务运行器 (持久化)
-│   │
 │   ├── app/
-│   │   ├── database.py
-│   │   ├── redis.py
-│   │   └── llm.py                     # LLM 工厂 (creative / precise)
-│   │
 │   ├── memory/
-│   │   ├── vector_store.py            # Qdrant 向量记忆
-│   │   ├── models.py                  # MemoryEntry / MemoryQuery / MemoryType
-│   │   └── manager.py                 # MemoryManager (4 层 + TTL)
-│   │
 │   ├── utils/
-│   │   └── json_helper.py
-│   │
-│   ├── skills/                        # Skill 定义
+│   ├── skills/
 │   │
 │   └── runtime/                       # ⭐ V1.5 Runtime (V5.0)
-│       ├── core.py                    # Director + WorkflowEngine + StoryMemory 组装
-│       ├── director.py                # Director (LLM 5-决策大脑 + 规则降级)
-│       ├── workflow_engine.py         # WorkflowEngine (Director 集成 + A2A + 记忆)
-│       ├── agent_conversation.py      # AgentConversationBus (A2A 富上下文)
-│       ├── prompt_runtime.py          # PromptRuntime (动态 Prompt 构建)
-│       ├── reflection_runtime.py      # ReflectionRuntime (good/bad/suggestion)
-│       ├── quality_engine.py          # QualityEngine (6 个 Checker)
-│       ├── retry_engine.py            # RetryEngine (策略化重试)
-│       ├── trace_runtime.py           # TraceRuntime (全链路追踪)
-│       ├── model_router.py            # ModelRouter (智能模型选择)
-│       ├── memory/                    # StoryMemory (7 维统一记忆)
-│       │   ├── story_memory.py
-│       │   └── memory_graph.py        # MemoryGraph (时间线角色状态)
-│       └── ...                        # AdapterRegistry / EventBus / Session
+│       ├── core.py
+│       ├── director.py
+│       ├── workflow_engine.py
+│       ├── agent_conversation.py
+│       ├── prompt_runtime.py
+│       ├── adapters/__init__.py       # ✅ 新增 MontageAdapterType
+│       ├── montage_adapter.py         # ⭐ StoryFlow ↔ Montage 数据桥接
+│       ├── montage/                   # ⭐ Montage Engine (OpenMontage 渲染引擎)
+│       │   ├── __init__.py
+│       │   ├── tts_engine.py          # 多供应商 TTS
+│       │   ├── subtitle_engine.py     # SRT/VTT 字幕
+│       │   ├── ffmpeg_ops.py          # FFmpeg 操作
+│       │   ├── audio_mixer.py         # 音频混合
+│       │   ├── video_composer.py      # 视频合成
+│       │   ├── quality_checker.py     # 质量检测
+│       │   ├── media_profiles.py      # 平台预设
+│       │   └── render_queue.py        # 批量渲染
+│       ├── memory/
+│       └── ...
 │
 ├── frontend/
-│   ├── package.json
-│   ├── vite.config.ts
 │   └── src/
-│       ├── App.tsx
-│       ├── api/index.ts               # API + WebSocket (完整类型约束)
-│       ├── types/index.ts             # TypeScript 类型 (与后端对齐)
-│       └── pages/
-│           ├── HomePage.tsx           # 创意输入 + 历史列表
-│           ├── StoryPage.tsx          # 7 步进度 + WebSocket
-│           └── ResultPage.tsx         # 视频 + 剧本 + 分镜 + 角色
+│       ├── pages/
+│       ├── api/
+│       └── types/
 │
-├── deploy/
-│   ├── docker-compose.yml
-│   ├── nginx/default.conf
-│   ├── init.sql
-│   └── .env.example
-│
-└── scripts/
-    └── init_db.py
+└── deploy/
+    ├── docker-compose.yml
+    └── .env.example
 ```
 
 ## 快速开始
@@ -274,10 +237,10 @@ storyflow-ai/
 - Node.js 18+
 - Docker & Docker Compose
 - FFmpeg
-- **外部 API**（远程服务，零本地 GPU 依赖）：
-  - OpenAI 兼容 LLM API（GPT-4o / Qwen / DeepSeek 等）
-  - DashScope API（图片生成 + TTS）
-  - Kling / Runway API（图生视频）
+- **外部 API**（远程服务）：
+  - OpenAI 兼容 LLM API（GPT-4o / Qwen / DeepSeek 等）— **必填**
+  - DashScope API（图片生成 + TTS）— 推荐
+  - Kling / Runway API（图生视频）— 推荐
   - ComfyUI (SDXL) — 可选本地回退
 
 ### 方式一：本地开发
@@ -303,12 +266,6 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 cd frontend && npm install && npm run dev
 ```
 
-| 地址 | 说明 |
-|------|------|
-| http://localhost:5173 | 前端 |
-| http://localhost:8000/docs | Swagger API |
-| http://localhost:8000/health | 健康检查 |
-
 ### 方式二：Docker Compose
 
 ```bash
@@ -332,79 +289,6 @@ docker compose up -d
 | `GET` | `/api/runtime/stats` | Runtime 统计 |
 | `GET` | `/health` | 健康检查 |
 
-```bash
-# 创建并生成
-curl -X POST http://localhost:8000/api/story \
-  -H "Content-Type: application/json" \
-  -d '{"title":"逆袭校花","prompt":"胖子甄大卫逆袭校花莲花的故事","genre":"校园"}'
-curl -X POST http://localhost:8000/api/story/{story_id}/generate
-curl http://localhost:8000/api/task/{task_id}
-```
-
-## Agent 工作流
-
-```
-用户创意 (prompt + genre)
-        │
-        ▼
-┌───────────────────────────────────────────────────────────┐
-│                   Director 决策循环                         │
-│                                                           │
-│  ArtifactManager (全部产出物) ──→ Director (LLM 分析)     │
-│                                    │                      │
-│                    ┌───────────────┼───────────┐          │
-│                    ▼               ▼           ▼          │
-│                PROCEED        RETRY/ROLLBACK  REWRITE     │
-│                    │          /REWRITE_PROMPT  _PROMPT     │
-│                    │               │            │          │
-│                    ▼               ▼            ▼          │
-│  StoryMemory (注入记忆) ──→ Agent 执行 ──→ A2A 消息传递   │
-│                                    │                      │
-│                            Reflection 反思               │
-│                           (good/bad/suggestion)           │
-│                                    │                      │
-│                              QualityEngine                 │
-│                                    │                      │
-│                            Director 下一轮决策             │
-└─────────────────────────┬─────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ Script Agent  │→│Character Agent│→│Storyboard    │
-│ temp=0.8      │  │ temp=0.4     │  │ Agent        │
-│ tenacity 3x   │  │ tenacity 3x  │  │ tenacity 3x/集│
-└──────────────┘  └──────────────┘  └──────┬───────┘
-                                          │
-                    ┌─────────────────────┼──────────────┐
-                    ▼                     ▼              ▼
-            ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-            │ Image Agent  │  │I2V Agent     │  │ Voice Agent  │
-            │ DashScope/   │  │ Kling/Runway │  │ DashScope    │
-            │ DALL-E 3     │  │ 3-5s/场景    │  │ TTS          │
-            │ 2x 重试/镜   │  │ 部分容错     │  │ 部分容错     │
-            └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-                   │                 │                 │
-                   └─────────────────┼─────────────────┘
-                                     ▼
-                           ┌──────────────────┐
-                           │  Video Agent     │
-                           │  FFmpeg 合成     │
-                           │  图片+音频+字幕  │
-                           │  → story.mp4     │
-                           └──────────────────┘
-```
-
-## 数据库设计
-
-```
-story          ─── 故事 (title, prompt, genre, status)
-  ├─ character ─── 角色 (name, gender, age, appearance JSONB, personality JSONB)
-  ├─ episode   ─── 剧集 (episode_no, title, summary, script)
-  └─ scene     ─── 场景 (scene_no, prompt, camera, duration, dialogue, image_url, audio_url)
-task           ─── 任务 (status, progress, current_step, error_message)
-```
-
 ## 配置项
 
 | 变量 | 默认值 | 说明 |
@@ -412,24 +296,28 @@ task           ─── 任务 (status, progress, current_step, error_message)
 | `LLM_API_KEY` | — | LLM API Key (**必填**) |
 | `LLM_MODEL` | `gpt-4o` | 模型名称 |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API 地址 |
-| `LLM_TEMPERATURE` | `0.7` | 默认温度 |
-| `DASHSCOPE_API_KEY` | — | DashScope API Key（图片 + TTS） |
-| `KLING_API_KEY` | — | Kling API Key（图生视频） |
+| `IMAGE_API_PROVIDER` | `dashscope` | 图片生成供应商 |
+| `IMAGE_API_KEY` | — | DashScope API Key |
+| `I2V_API_PROVIDER` | `kling` | 图生视频供应商 |
+| `I2V_API_KEY` | — | Kling API Key |
+| `VOICE_API_PROVIDER` | `dashscope_tts` | TTS 供应商 (legacy) |
+| `VOICE_API_KEY` | — | DashScope TTS API Key |
+| **Montage 引擎** | | |
+| `MONTAGE_ENABLED` | `True` | 启用 Montage 渲染引擎 |
+| `MONTAGE_TTS_PROVIDER` | `auto` | TTS 优先供应商 |
+| `MONTAGE_TRANSITION` | `crossfade` | 镜头转场类型 |
+| `MONTAGE_TRANSITION_DURATION` | `0.5` | 转场时长 (秒) |
+| `MONTAGE_BURN_SUBTITLES` | `True` | 烧录字幕 |
+| `MONTAGE_QUALITY_CHECK` | `True` | 成片质量检测 |
+| `MONTAGE_BGM_PATH` | `""` | BGM 文件路径 |
+| `MONTAGE_MEDIA_PROFILE` | `storyflow_default` | 输出平台预设 |
+| **基础设施** | | |
 | `DATABASE_URL` | `postgresql+asyncpg://...` | PostgreSQL |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant |
 | `STORAGE_PATH` | `./storage` | 文件存储 |
-| `COMFYUI_URL` | `http://localhost:8188` | ComfyUI（可选本地回退） |
-| `COMFYUI_POLL_TIMEOUT` | `300` | 单张图最大等待秒数 |
-| `COMFYUI_MAX_RETRIES` | `2` | 单张图重试次数 |
 | `MAX_EPISODES` | `6` | 最大集数 |
 | `SCENES_PER_EPISODE` | `(5, 10)` | 每集场景数范围 |
-| `LANGFUSE_PUBLIC_KEY` | — | Langfuse 公钥（可选，启用可观测性） |
-| `LANGFUSE_SECRET_KEY` | — | Langfuse 密钥 |
-| `MEMORY_WORKING_TTL` | `300` | 工作记忆 TTL (秒) |
-| `MEMORY_SESSION_TTL` | `86400` | 会话记忆 TTL (秒) |
-
-> **注意：** V1.5 Runtime 是默认且唯一的运行时，无需设置 `USE_RUNTIME` 环境变量。旧版 LangGraph 管线已移除。
 
 ## License
 

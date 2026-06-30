@@ -1,14 +1,18 @@
-"""Voice Agent — generate speech via cloud TTS API (DashScope TTS / Mock).
+"""Voice Agent — generate speech via multi-provider TTS (Montage Engine).
 
-All cloud APIs, no local deployment required.
+Uses the Montage TTSEngine for multi-provider support:
+  - OpenAI TTS (gpt-4o-mini-tts) — preferred for quality
+  - DashScope TTS (CosyVoice) — Chinese voice specialist
+  - ElevenLabs — expressive multilingual
+  - Google Cloud TTS — cloud fallback
+  - Piper — offline local fallback
+  - Silent WAV — ultimate fallback
+
+Falls back to legacy DashScope-only implementation if Montage is unavailable.
 """
 
-import asyncio
-import base64
 import logging
 from pathlib import Path
-
-import httpx
 
 from configs.settings import settings
 
@@ -40,6 +44,54 @@ async def voice_agent(state: dict, context: dict) -> dict:
         logger.error("No storyboard scenes | story_id=%s", story_id)
         return {"audios": [], "status": "error", "error": "No storyboard scenes."}
 
+    # Try Montage engine first
+    use_montage = getattr(settings, "MONTAGE_ENABLED", True)
+
+    if use_montage:
+        try:
+            return await _voice_via_montage(state, context)
+        except Exception as e:
+            logger.warning("Montage TTS failed, falling back to legacy: %s", e)
+
+    # Legacy fallback
+    return await _voice_legacy(state, context)
+
+
+async def _voice_via_montage(state: dict, context: dict) -> dict:
+    """Use Montage TTSEngine for multi-provider TTS."""
+    from runtime.montage_adapter import MontageAdapter
+
+    adapter = MontageAdapter()
+    audios = adapter.generate_voices(state)
+
+    errors: list[str] = []
+    for a in audios:
+        if not Path(a.get("audio_path", "")).exists():
+            errors.append(f"Scene {a.get('scene_no')}: no output file")
+
+    status = "voice_done"
+    error_msg = ""
+    if not audios:
+        status = "error"
+        error_msg = "All voice generations failed or no dialogues found."
+    elif errors:
+        status = "voice_partial"
+        error_msg = f"Partial failures: {'; '.join(errors)}"
+
+    logger.info(
+        "voice_agent (montage) completed | %d/%d audios | status=%s",
+        len(audios), len(state.get("storyboard", [])), status,
+    )
+
+    return {"audios": audios, "status": status, "error": error_msg}
+
+
+async def _voice_legacy(state: dict, context: dict) -> dict:
+    """Legacy DashScope-only TTS (original implementation)."""
+    story_id = state.get("story_id", "unknown")
+    storyboard = state.get("storyboard", [])
+    characters = state.get("characters", [])
+
     audios: list[dict] = []
     errors: list[str] = []
 
@@ -55,7 +107,6 @@ async def voice_agent(state: dict, context: dict) -> dict:
         if not dialogue.strip():
             continue
 
-        # Determine speaker gender from first character
         speaker = "female"
         scene_chars = scene.get("characters", [])
         if scene_chars:
@@ -84,7 +135,6 @@ async def voice_agent(state: dict, context: dict) -> dict:
         except Exception as exc:
             logger.error("Voice generation failed for scene %d: %s", scene_no, exc)
             errors.append(f"Scene {scene_no}: {exc}")
-            # Fallback to silent
             try:
                 _create_silent_wav(output_path, float(scene.get("duration", 3)))
                 audios.append(_make_audio_entry(story_id, scene_no, output_path, speaker, dialogue))
@@ -100,8 +150,8 @@ async def voice_agent(state: dict, context: dict) -> dict:
         status = "voice_partial"
         error_msg = f"Partial failures: {'; '.join(errors)}"
 
-    logger.info("voice_agent completed | %d/%d audios | status=%s | story_id=%s",
-                len(audios), len(storyboard), status, story_id)
+    logger.info("voice_agent (legacy) completed | %d/%d audios | status=%s",
+                len(audios), len(storyboard), status)
 
     return {"audios": audios, "status": status, "error": error_msg}
 
@@ -121,6 +171,8 @@ def _make_audio_entry(story_id: str, scene_no: int, audio_path: str,
 
 async def _dashscope_tts(text: str, speaker: str, output_path: str):
     """Generate speech via DashScope TTS API (async task + poll)."""
+    import httpx
+
     api_key = settings.VOICE_API_KEY
     base_url = settings.VOICE_API_BASE_URL
     model = settings.VOICE_MODEL
@@ -130,7 +182,6 @@ async def _dashscope_tts(text: str, speaker: str, output_path: str):
         "Content-Type": "application/json",
     }
 
-    # DashScope TTS supports these model-specific params
     payload = {
         "model": model,
         "input": {"text": text},
@@ -150,14 +201,13 @@ async def _dashscope_tts(text: str, speaker: str, output_path: str):
 
     task_id = result.get("output", {}).get("task_id")
     if not task_id:
-        # Synchronous mode — response contains audio URL directly
         audio_url = result.get("output", {}).get("audio_url", "")
         if audio_url:
             await _download_file(audio_url, output_path)
             return
         raise RuntimeError(f"DashScope TTS: no task_id or audio_url: {result}")
 
-    # Poll for async task
+    import asyncio
     poll_url = f"{base_url}/tasks/{task_id}"
     timeout = 120
     poll_interval = 3
@@ -187,7 +237,7 @@ async def _dashscope_tts(text: str, speaker: str, output_path: str):
 # ── Helpers ──
 
 async def _download_file(url: str, output_path: str):
-    """Download a file from URL to local path."""
+    import httpx
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.get(url)
         resp.raise_for_status()

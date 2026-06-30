@@ -1,7 +1,14 @@
-"""Video Agent — merge video clips + audio into final MP4.
+"""Video Agent — compose final video via Montage Engine.
 
-Receives video clips from image_to_video_agent, merges audio, burns subtitles,
-and concatenates into the final story.mp4.
+Uses the Montage VideoComposer for professional-grade video assembly:
+  - Crossfade / fade-through-black transitions
+  - SRT subtitle generation with word-level timing
+  - Multi-track audio mixing with ducking
+  - BGM segmented mixing
+  - Post-render quality checks (7 automated checks)
+  - Media profile output (YouTube / TikTok / Instagram)
+
+Falls back to legacy FFmpeg-only implementation if Montage is unavailable.
 """
 
 import asyncio
@@ -13,148 +20,74 @@ from configs.settings import settings
 logger = logging.getLogger(__name__)
 
 
-def _get_media_duration(path: str) -> float:
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=30,
-        )
-        return float(result.stdout.strip())
-    except Exception:
-        return 5.0
-
-
-def _fmt_ass_time(seconds: float) -> str:
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = seconds % 60
-    return f"{h}:{m:02d}:{int(s):02d}.{int((s % 1) * 100):02d}"
-
-
-def _write_ass_file(scenes: list[dict], clip_durations: dict[int, float], save_path: Path):
-    ass_header = """\
-[Script Info]
-Title: StoryFlow AI Subtitles
-ScriptType: v4.00+
-PlayResX: 1024
-PlayResY: 1024
-WrapStyle: 0
-
-[V4+ Styles]
-Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,10,10,30,1
-
-[Events]
-Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
-"""
-    events = []
-    cumulative_time = 0.0
-    for scene in scenes:
-        scene_no = scene.get("scene_no", 0)
-        dialogue = scene.get("dialogue", "")
-        duration = clip_durations.get(scene_no, float(scene.get("duration", 5)))
-        if not dialogue.strip():
-            cumulative_time += duration
-            continue
-        start = _fmt_ass_time(cumulative_time)
-        end = _fmt_ass_time(cumulative_time + duration)
-        speaker = scene.get("characters", ["旁白"])[0] if scene.get("characters") else "旁白"
-        safe = dialogue.replace("\\", "\\\\").replace("\n", "\\N")
-        events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\b1}}{speaker}: {safe}")
-        cumulative_time += duration
-
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    save_path.write_text(ass_header + "\n".join(events), encoding="utf-8")
-
-
-async def _merge_audio_to_clip(video_path: str, audio_path: str | None,
-                              output_path: str) -> bool:
-    """Merge audio into a video clip."""
-    cmd = ["ffmpeg", "-y", "-i", video_path]
-    if audio_path and Path(audio_path).exists():
-        cmd.extend(["-i", audio_path, "-c:v", "copy", "-c:a", "aac",
-                     "-b:a", "128k", "-shortest"])
-    else:
-        cmd.extend(["-c", "copy"])
-    cmd.append(output_path)
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-        return proc.returncode == 0 and Path(output_path).exists()
-    except Exception as e:
-        logger.error("Merge audio error: %s", e)
-        return False
-
-
-async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> bool:
-    """Burn ASS subtitles into a video."""
-    cmd = ["ffmpeg", "-y", "-i", input_path, "-vf", f"ass={ass_path}",
-           "-c:a", "copy", str(output_path)]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-        return proc.returncode == 0 and Path(output_path).exists()
-    except Exception:
-        return False
-
-
-async def _direct_concat(clips: list[dict], output_path: str) -> bool:
-    """Concat video clips via FFmpeg concat demuxer."""
-    filelist = Path(output_path).parent / "_concat.txt"
-    with open(filelist, "w") as f:
-        for c in clips:
-            f.write(f"file '{c['video_path']}'\n")
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", str(filelist), "-c", "copy", output_path,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-        if proc.returncode != 0:
-            logger.error("Direct concat failed: %s", stderr.decode()[:300])
-            return False
-        return True
-    except asyncio.TimeoutError:
-        return False
-    finally:
-        try:
-            filelist.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-
 async def video_agent(state: dict, context: dict) -> dict:
     """Video assembly agent.
 
-    Merges video clips + audio into final MP4 with subtitles.
+    Merges video clips + audio into final MP4 with transitions, subtitles,
+    and optional BGM using the Montage rendering engine.
+
     If video_clips exist (from image_to_video_agent), uses them directly.
     Otherwise falls back to static image → video via FFmpeg.
     """
     story_id = state.get("story_id", "unknown")
-    storyboard = state.get("storyboard", [])
     video_clips = state.get("video_clips", [])
     images = state.get("images", [])
-    audios = state.get("audios", [])
 
     logger.info("video_agent started | story_id=%s, %d clips, %d images",
                 story_id, len(video_clips), len(images))
 
-    if video_clips:
-        return await _assemble_from_clips(state, context)
-    elif images:
-        return await _legacy_assembly(state, context)
+    if video_clips or images:
+        return await _compose_via_montage(state, context)
     else:
         return {"video_path": "", "status": "error", "error": "No video clips or images."}
 
 
+async def _compose_via_montage(state: dict, context: dict) -> dict:
+    """Use Montage VideoComposer for professional video assembly."""
+    use_montage = getattr(settings, "MONTAGE_ENABLED", True)
+
+    if use_montage:
+        try:
+            from runtime.montage_adapter import MontageAdapter
+
+            adapter = MontageAdapter()
+            result = adapter.compose_video(
+                state,
+                transition=getattr(settings, "MONTAGE_TRANSITION", "crossfade"),
+                transition_duration=getattr(settings, "MONTAGE_TRANSITION_DURATION", 0.5),
+                bgm_path=getattr(settings, "MONTAGE_BGM_PATH", ""),
+                burn_subtitles=getattr(settings, "MONTAGE_BURN_SUBTITLES", True),
+                run_quality_check=getattr(settings, "MONTAGE_QUALITY_CHECK", True),
+            )
+
+            status = result.get("status", "video_done")
+            error = result.get("error", "")
+            video_path = result.get("output", "")
+            video_url = result.get("video_url", "")
+
+            logger.info("video_agent (montage) completed | success=%s | %s", status, video_path)
+            return {
+                "video_path": video_path,
+                "video_url": video_url,
+                "status": status,
+                "error": error,
+                "montage_report": {
+                    "method": result.get("method"),
+                    "duration": result.get("duration"),
+                    "quality": result.get("quality_report"),
+                },
+            }
+        except Exception as e:
+            logger.warning("Montage compose failed, falling back to legacy: %s", e)
+
+    # Legacy fallback
+    return await _assemble_from_clips(state, context) if state.get("video_clips") else await _legacy_assembly(state, context)
+
+
+# ── Legacy implementations (unchanged) ──
+
 async def _assemble_from_clips(state: dict, context: dict) -> dict:
-    """Assemble final video from pre-generated video clips."""
+    """Assemble final video from pre-generated video clips (legacy)."""
     story_id = state.get("story_id", "unknown")
     storyboard = state.get("storyboard", [])
     video_clips = state.get("video_clips", [])
@@ -168,7 +101,6 @@ async def _assemble_from_clips(state: dict, context: dict) -> dict:
 
     audio_map = {a["scene_no"]: a for a in audios}
 
-    # Step 1: Merge audio into each clip
     merged_clips: list[dict] = []
     clip_durations: dict[int, float] = {}
 
@@ -193,11 +125,9 @@ async def _assemble_from_clips(state: dict, context: dict) -> dict:
     if not merged_clips:
         return {"video_path": "", "status": "error", "error": "No valid clips to merge."}
 
-    # Step 2: Generate ASS subtitles
     ass_path = merged_dir / "subtitles.ass"
     _write_ass_file(storyboard, clip_durations, ass_path)
 
-    # Step 3: Burn subtitles into each clip
     subtitled_dir = story_dir / "subtitled"
     subtitled_dir.mkdir(parents=True, exist_ok=True)
     subtitled_clips: list[dict] = []
@@ -211,7 +141,6 @@ async def _assemble_from_clips(state: dict, context: dict) -> dict:
         else:
             subtitled_clips.append(clip)
 
-    # Step 4: Concat all clips
     final_path = str(final_dir / "story.mp4")
     success = await _direct_concat(subtitled_clips, final_path)
 
@@ -219,7 +148,7 @@ async def _assemble_from_clips(state: dict, context: dict) -> dict:
     status = "video_done" if success else "error"
     error = "" if success else "Final concat failed"
 
-    logger.info("video_agent completed | success=%s | %s", success, final_path)
+    logger.info("video_agent (legacy) completed | success=%s | %s", success, final_path)
     return {"video_path": final_path, "video_url": video_url, "status": status, "error": error}
 
 
@@ -280,7 +209,6 @@ async def _legacy_assembly(state: dict, context: dict) -> dict:
     ass_path = video_dir / "subtitles.ass"
     _write_ass_file(storyboard, scene_durations, ass_path)
 
-    # Burn subtitles
     subtitled_dir = story_dir / "subtitled"
     subtitled_dir.mkdir(parents=True, exist_ok=True)
     subtitled_videos: list[Path] = []
@@ -293,7 +221,6 @@ async def _legacy_assembly(state: dict, context: dict) -> dict:
         else:
             subtitled_videos.append(sv)
 
-    # Concat
     final_path = video_dir / "story.mp4"
     filelist_path = scenes_dir / "filelist.txt"
     with open(filelist_path, "w") as f:
@@ -319,3 +246,118 @@ async def _legacy_assembly(state: dict, context: dict) -> dict:
     video_url = f"/storage/stories/{story_id}/video/story.mp4"
     return {"video_path": str(final_path), "video_url": video_url,
             "status": "video_done", "error": ""}
+
+
+# ── Legacy helpers (unchanged) ──
+
+def _get_media_duration(path: str) -> float:
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=30,
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        return 5.0
+
+
+def _fmt_ass_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h}:{m:02d}:{int(s):02d}.{int((s % 1) * 100):02d}"
+
+
+def _write_ass_file(scenes: list[dict], clip_durations: dict[int, float], save_path: Path):
+    ass_header = """\
+[Script Info]
+Title: StoryFlow AI Subtitles
+ScriptType: v4.00+
+PlayResX: 1024
+PlayResY: 1024
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
+Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,10,10,30,1
+
+[Events]
+Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+"""
+    events = []
+    cumulative_time = 0.0
+    for scene in scenes:
+        scene_no = scene.get("scene_no", 0)
+        dialogue = scene.get("dialogue", "")
+        duration = clip_durations.get(scene_no, float(scene.get("duration", 5)))
+        if not dialogue.strip():
+            cumulative_time += duration
+            continue
+        start = _fmt_ass_time(cumulative_time)
+        end = _fmt_ass_time(cumulative_time + duration)
+        speaker = scene.get("characters", ["旁白"])[0] if scene.get("characters") else "旁白"
+        safe = dialogue.replace("\\", "\\\\").replace("\n", "\\N")
+        events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\b1}}{speaker}: {safe}")
+        cumulative_time += duration
+
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_path.write_text(ass_header + "\n".join(events), encoding="utf-8")
+
+
+async def _merge_audio_to_clip(video_path: str, audio_path: str | None,
+                              output_path: str) -> bool:
+    cmd = ["ffmpeg", "-y", "-i", video_path]
+    if audio_path and Path(audio_path).exists():
+        cmd.extend(["-i", audio_path, "-c:v", "copy", "-c:a", "aac",
+                     "-b:a", "128k", "-shortest"])
+    else:
+        cmd.extend(["-c", "copy"])
+    cmd.append(output_path)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        _, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        return proc.returncode == 0 and Path(output_path).exists()
+    except Exception as e:
+        logger.error("Merge audio error: %s", e)
+        return False
+
+
+async def _burn_subtitles(input_path: str, ass_path: str, output_path: str) -> bool:
+    cmd = ["ffmpeg", "-y", "-i", input_path, "-vf", f"ass={ass_path}",
+           "-c:a", "copy", str(output_path)]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        _, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        return proc.returncode == 0 and Path(output_path).exists()
+    except Exception:
+        return False
+
+
+async def _direct_concat(clips: list[dict], output_path: str) -> bool:
+    filelist = Path(output_path).parent / "_concat.txt"
+    with open(filelist, "w") as f:
+        for c in clips:
+            f.write(f"file '{c['video_path']}'\n")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(filelist), "-c", "copy", output_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        if proc.returncode != 0:
+            logger.error("Direct concat failed: %s", stderr.decode()[:300])
+            return False
+        return True
+    except asyncio.TimeoutError:
+        return False
+    finally:
+        try:
+            filelist.unlink(missing_ok=True)
+        except Exception:
+            pass

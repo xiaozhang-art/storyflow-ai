@@ -1,9 +1,0 @@
-skills/
-node_modules/
-tool-results/
-download/
-*.pyc
-__pycache__/
-.env
-.venv/
-venv/

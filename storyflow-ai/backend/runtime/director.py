@@ -1,428 +1,476 @@
-"""Director Agent - Observes, thinks, and makes decisions.
+"""Director Runtime - The autonomous decision-making brain of the Agent OS.
 
-The Director NEVER generates content. It only:
-    1. Observes step results via EventBus
-    2. Thinks about what went wrong
-    3. Makes decisions: retry, rollback, skip, rewrite prompt, etc.
+The Director monitors every agent step, reads all produced Artifacts,
+and uses LLM analysis to make intelligent decisions about how to proceed.
 
-Example decisions:
-    - Image failed → Retry with modified prompt
-    - Character inconsistency detected → Re-run character agent, then re-run image
-    - Quality check failed → Analyze why and trigger fix
-    - Voice mismatched emotion → Re-generate with different parameters
+Five decisions the Director can make:
+1. RETRY          - Re-run the current step (transient failure, quality issue)
+2. ROLLBACK       - Go back to a previous step and re-execute from there
+3. REWRITE_PROMPT - Modify the prompt/input and re-run the current step
+4. SKIP           - Skip the current step (non-critical, can proceed without)
+5. INSERT_STEP    - Insert a new remediation step before continuing
 
-The Director subscribes to EventBus events and can publish decisions
-that the WorkflowEngine acts upon.
+The Director is NOT a simple rule engine. It uses LLM to analyze
+the full artifact context (script, characters, storyboard, images, etc.)
+and understand WHY a failure occurred before deciding what to do.
 """
+from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+import re
+import time
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
-from runtime.event_bus import EventBus, EventType, Event, get_event_bus
+from runtime.hook.dispatcher import HookEvent, HookHandler, get_hook_dispatcher
+from runtime.hook import events as hook_events
 
 logger = logging.getLogger(__name__)
 
 
-class DecisionType(str, Enum):
-    """Types of decisions the Director can make."""
-    CONTINUE = "continue"          # Everything looks good, proceed
-    RETRY = "retry"                # Retry the current step
-    ROLLBACK = "rollback"          # Go back to a previous step
-    SKIP = "skip"                  # Skip this step
-    MODIFY_AND_RETRY = "modify_retry"  # Modify context and retry
-    ABORT = "abort"                # Abort the entire pipeline
-    HUMAN_REVIEW = "human_review"  # Pause and ask for human input
+class DirectorDecision(str, Enum):
+    """Decisions the Director can make."""
+    PROCEED = "proceed"
+    RETRY = "retry"
+    ROLLBACK = "rollback"
+    REWRITE_PROMPT = "rewrite_prompt"
+    SKIP = "skip"
+    INSERT_STEP = "insert_step"
 
 
-@dataclass
-class Decision:
-    """A decision made by the Director."""
-    type: DecisionType
-    step: str
-    reason: str
-    target_step: str = ""       # For ROLLBACK: which step to go back to
-    modifications: dict = field(default_factory=dict)  # For MODIFY_AND_RETRY
-    confidence: float = 1.0     # How confident is this decision (0-1)
+class DirectorVerdict:
+    """Result of the Director's analysis."""
+    __slots__ = (
+        "decision", "agent_id", "reasoning", "target_step",
+        "modified_prompt", "modified_state", "insert_step_config",
+        "confidence", "analysis_latency_ms",
+    )
 
+    def __init__(
+        self,
+        decision: DirectorDecision,
+        agent_id: str,
+        reasoning: str = "",
+        target_step: str = "",
+        modified_prompt: str = "",
+        modified_state: dict | None = None,
+        insert_step_config: dict | None = None,
+        confidence: float = 0.0,
+        analysis_latency_ms: float = 0.0,
+    ):
+        self.decision = decision
+        self.agent_id = agent_id
+        self.reasoning = reasoning
+        self.target_step = target_step
+        self.modified_prompt = modified_prompt
+        self.modified_state = modified_state or {}
+        self.insert_step_config = insert_step_config or {}
+        self.confidence = confidence
+        self.analysis_latency_ms = analysis_latency_ms
 
-class DirectorAgent:
-    """The Director observes pipeline execution and makes decisions.
-
-    It subscribes to STEP_COMPLETED and STEP_FAILED events and can
-    intervene in the pipeline flow.
-
-    V2: Rule-based decisions
-    V3+: LLM-powered decisions
-    """
-
-    def __init__(self, event_bus: EventBus | None = None):
-        self.event_bus = event_bus or get_event_bus()
-        self._decision_log: list[dict] = []
-        self._enabled = True
-        self._retry_counts: dict[str, int] = {}  # step → retry count
-
-        # Register event handlers
-        self.event_bus.subscribe(EventType.STEP_COMPLETED, self._on_step_completed)
-        self.event_bus.subscribe(EventType.STEP_FAILED, self._on_step_failed)
-        self.event_bus.subscribe(EventType.QUALITY_FAIL, self._on_quality_fail)
-
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    @enabled.setter
-    def enabled(self, value: bool):
-        self._enabled = value
-
-    async def _on_step_completed(self, event: Event):
-        """Called when a step completes. Director reviews the result."""
-        if not self._enabled:
-            return
-
-        step = event.data.get("step", "")
-        session_id = event.session_id
-
-        logger.info("Director reviewing completed step: %s", step)
-
-        # Reset retry count on success
-        self._retry_counts.pop(step, None)
-
-        # V2: Rule-based review
-        decision = await self._review_step_result(step, event.data, session_id)
-        if decision and decision.type != DecisionType.CONTINUE:
-            self._log_decision(decision, session_id)
-            await self._publish_decision(decision, session_id)
-
-    async def _on_step_failed(self, event: Event):
-        """Called when a step fails. Director decides what to do."""
-        if not self._enabled:
-            return
-
-        step = event.data.get("step", "")
-        session_id = event.session_id
-        error = event.data.get("error", "")
-
-        # Track retry count
-        self._retry_counts[step] = self._retry_counts.get(step, 0) + 1
-
-        retry_count = self._retry_counts[step]
-
-        if retry_count <= 2:
-            decision = Decision(
-                type=DecisionType.RETRY,
-                step=step,
-                reason=f"Step failed (attempt {retry_count}): {error}. "
-                       f"Retrying with exponential backoff.",
-                confidence=0.9 if retry_count == 1 else 0.6,
-            )
-        else:
-            # After 3 failures, try to diagnose and fix
-            decision = Decision(
-                type=DecisionType.MODIFY_AND_RETRY,
-                step=step,
-                reason=f"Step failed {retry_count} times. Analyzing root cause.",
-                target_step=step,
-                confidence=0.4,
-            )
-
-        self._log_decision(decision, session_id)
-        await self._publish_decision(decision, session_id)
-
-    async def _on_quality_fail(self, event: Event):
-        """Called when a quality check fails."""
-        if not self._enabled:
-            return
-
-        artifact_type = event.data.get("artifact_type", "")
-        result = event.data.get("result", {})
-        session_id = event.session_id
-
-        logger.warning("Director: quality check failed for %s: %s",
-                        artifact_type, result)
-
-        # Analyze the quality failure and decide
-        issues = result.get("issues", [])
-        if not issues:
-            return
-
-        # Determine which step to go back to
-        rollback_map = {
-            "image": "storyboard",       # Bad image → fix prompt in storyboard
-            "voice": "voice",            # Bad voice → retry voice
-            "character": "character",    # Bad character → redo character
-            "storyboard": "character",   # Bad storyboard → might need better characters
+    def to_dict(self) -> dict:
+        return {
+            "decision": self.decision.value,
+            "agent_id": self.agent_id,
+            "reasoning": self.reasoning,
+            "target_step": self.target_step,
+            "modified_prompt": self.modified_prompt,
+            "modified_state": self.modified_state,
+            "insert_step_config": self.insert_step_config,
+            "confidence": self.confidence,
+            "analysis_latency_ms": self.analysis_latency_ms,
         }
 
-        target_step = rollback_map.get(artifact_type, artifact_type)
 
-        decision = Decision(
-            type=DecisionType.ROLLBACK,
-            step=artifact_type,
-            target_step=target_step,
-            reason=f"Quality check failed for {artifact_type}: "
-                   f"{', '.join(issues[:3])}. Rolling back to {target_step}.",
-            confidence=0.7,
-        )
+class ArtifactManager:
+    """Manages all artifacts produced during the workflow."""
 
-        self._log_decision(decision, session_id)
-        await self._publish_decision(decision, session_id)
+    PIPELINE_ORDER = ["script", "character", "storyboard", "image", "voice", "video"]
 
-    async def _review_step_result(self, step: str, data: dict,
-                                   session_id: str) -> Decision | None:
-        """Review a completed step's result and optionally intervene.
+    def __init__(self):
+        self._artifacts: dict[str, dict[str, Any]] = {}
+        self._execution_log: list[dict[str, Any]] = []
 
-        V2: Simple rule-based checks
-        V3.5: Uses LLM for deeper analysis when available
-        """
-        # Try LLM-powered review if reflection data is available
-        try:
-            from runtime.reflection import get_reflection_runtime
-            reflection_rt = get_reflection_runtime()
-            ref = reflection_rt.get_reflection(session_id, step)
-            if ref and ref.score < 0.5 and ref.bad:
-                # Low reflection score + issues → consider intervention
-                decision = await self._llm_root_cause_analysis(
-                    step, ref, session_id
-                )
-                if decision and decision.type != DecisionType.CONTINUE:
-                    return decision
-        except Exception:
-            pass  # Fall through to V2 behavior
-
-        return None
-
-    async def _llm_root_cause_analysis(
-        self, step: str, reflection: Any, session_id: str
-    ) -> Decision | None:
-        """Use LLM to diagnose the root cause of a quality issue.
-
-        This is the V3.5 Director: instead of "Image retry N times",
-        it finds the root cause and points to the correct Agent.
-        """
-        try:
-            from app.llm import get_precise_llm
-            llm = get_precise_llm()
-
-            prompt = (
-                f"A pipeline step '{step}' produced low-quality output.\n"
-                f"Reflection analysis:\n"
-                f"  Good: {reflection.good}\n"
-                f"  Bad: {reflection.bad}\n"
-                f"  Suggestions: {reflection.suggestion}\n"
-                f"  Score: {reflection.score}\n\n"
-                f"Diagnose the root cause. Which upstream step is responsible?\n"
-                f"Options: script, character, storyboard, image, voice, video, "
-                f"or the step itself ({step}).\n"
-                f"Respond in JSON: {{\"root_cause_step\": \"...\", "
-                f"\"reason\": \"...\", \"action\": \"retry|rollback|continue\"}}"
-            )
-
-            response = await llm.ainvoke(prompt)
-            text = response.content if hasattr(response, "content") else str(response)
-
-            import json, re
-            match = re.search(r'\{[^{}]+\}', text, re.DOTALL)
-            if match:
-                data = json.loads(match.group())
-                root_step = data.get("root_cause_step", step)
-                reason = data.get("reason", "")
-                action = data.get("action", "retry")
-
-                if action == "rollback" and root_step != step:
-                    return Decision(
-                        type=DecisionType.ROLLBACK,
-                        step=step,
-                        target_step=root_step,
-                        reason=f"LLM root cause: {reason}. "
-                               f"Root cause in '{root_step}', not '{step}'.",
-                        confidence=0.7,
-                    )
-                elif action == "retry":
-                    return Decision(
-                        type=DecisionType.RETRY,
-                        step=step,
-                        reason=f"LLM diagnosis: {reason}",
-                        confidence=0.7,
-                    )
-        except Exception as e:
-            logger.debug("Director LLM analysis failed: %s", e)
-
-        return None
-
-    async def decide_on_error(self, step: str, error: Exception,
-                               context: dict) -> Decision:
-        """Called by the WorkflowEngine when an error occurs.
-
-        The Director analyzes the error and decides what to do.
-
-        Args:
-            step: The step that failed
-            error: The exception
-            context: The step context (blackboard state, etc.)
-
-        Returns:
-            A Decision indicating what to do
-        """
-        error_str = str(error).lower()
-
-        # Common error patterns
-        if "timeout" in error_str or "timed out" in error_str:
-            return Decision(
-                type=DecisionType.RETRY,
-                step=step,
-                reason=f"Timeout error, likely transient: {error}",
-                confidence=0.85,
-            )
-        elif "api_key" in error_str or "authentication" in error_str:
-            return Decision(
-                type=DecisionType.ABORT,
-                step=step,
-                reason=f"Authentication error, cannot retry: {error}",
-                confidence=0.95,
-            )
-        elif "rate_limit" in error_str:
-            return Decision(
-                type=DecisionType.RETRY,
-                step=step,
-                reason=f"Rate limited, waiting and retrying: {error}",
-                confidence=0.9,
-            )
-        elif "content_filter" in error_str or "safety" in error_str:
-            # Content filtered → go back to storyboard to fix prompt
-            if step == "image":
-                return Decision(
-                    type=DecisionType.ROLLBACK,
-                    step=step,
-                    target_step="storyboard",
-                    reason=f"Content safety issue in image generation. "
-                           f"Need to revise storyboard prompts.",
-                    confidence=0.8,
-                )
-            return Decision(
-                type=DecisionType.SKIP,
-                step=step,
-                reason=f"Content safety issue, skipping: {error}",
-                confidence=0.7,
-            )
-        else:
-            # Default: retry
-            return Decision(
-                type=DecisionType.RETRY,
-                step=step,
-                reason=f"Unknown error, retrying: {error}",
-                confidence=0.5,
-            )
-
-    async def decide_on_quality_fail(self, step: str, quality_result,
-                                      session_id: str) -> Decision:
-        """Called by WorkflowEngine when a quality check fails.
-
-        The Director analyzes the quality issues and decides whether
-        to retry, skip, or continue.
-
-        Args:
-            step: The step that failed quality
-            quality_result: QualityResult from the quality engine
-            session_id: Session ID
-
-        Returns:
-            A Decision
-        """
-        issues = quality_result.issues
-        score = quality_result.score
-
-        # High score (close to passing): retry with hope of improvement
-        if score >= 0.7:
-            decision = Decision(
-                type=DecisionType.RETRY,
-                step=step,
-                reason=f"Quality almost passed (score={score:.1f}), retrying. "
-                       f"Issues: {', '.join(issues[:2])}",
-                confidence=0.7,
-            )
-        # Very low score: the step output is fundamentally wrong
-        elif score < 0.3:
-            # Determine rollback target
-            rollback_map = {
-                "image": "storyboard",
-                "voice": "storyboard",
-                "character": "script",
-                "storyboard": "character",
-            }
-            target = rollback_map.get(step, step)
-
-            decision = Decision(
-                type=DecisionType.ROLLBACK if target != step else DecisionType.RETRY,
-                step=step,
-                target_step=target,
-                reason=f"Quality critically low (score={score:.1f}). "
-                       f"Issues: {', '.join(issues[:3])}. "
-                       f"{'Rolling back to ' + target + ' to fix root cause.' if target != step else 'Retrying with modified input.'}",
-                confidence=0.8,
-            )
-        else:
-            # Medium score: retry is reasonable
-            decision = Decision(
-                type=DecisionType.RETRY,
-                step=step,
-                reason=f"Quality check failed (score={score:.1f}). "
-                       f"Issues: {', '.join(issues[:2])}",
-                confidence=0.6,
-            )
-
-        self._log_decision(decision, session_id)
-        await self._publish_decision(decision, session_id)
-        return decision
-
-    async def _publish_decision(self, decision: Decision, session_id: str):
-        """Publish a director decision event."""
-        await self.event_bus.publish_event(
-            EventType.DIRECTOR_DECISION,
-            data={
-                "decision_type": decision.type.value,
-                "step": decision.step,
-                "target_step": decision.target_step,
-                "reason": decision.reason,
-                "modifications": decision.modifications,
-                "confidence": decision.confidence,
-            },
-            session_id=session_id,
-            source="director",
-        )
-
-    def _log_decision(self, decision: Decision, session_id: str):
-        """Log a decision for auditing."""
-        self._decision_log.append({
-            "session_id": session_id,
-            "decision": decision.type.value,
-            "step": decision.step,
-            "reason": decision.reason,
-            "confidence": decision.confidence,
+    def store(self, agent_id: str, artifact: dict[str, Any]):
+        """Store an artifact produced by an agent."""
+        self._artifacts[agent_id] = {
+            "data": artifact,
+            "stored_at": time.time(),
+        }
+        self._execution_log.append({
+            "agent_id": agent_id,
+            "action": "store",
+            "timestamp": time.time(),
         })
-        logger.info("Director decision: %s → %s (confidence=%.1f) [%s]",
-                     decision.step, decision.type.value,
-                     decision.confidence, decision.reason)
+        logger.debug("Artifact stored: %s (%d keys)", agent_id, len(artifact))
 
-    def get_decision_log(self, session_id: str = None) -> list[dict]:
-        """Get the decision log, optionally filtered by session."""
-        if session_id:
-            return [d for d in self._decision_log if d["session_id"] == session_id]
-        return list(self._decision_log)
+    def get(self, agent_id: str) -> dict[str, Any] | None:
+        """Get artifact by agent_id."""
+        entry = self._artifacts.get(agent_id)
+        return entry["data"] if entry else None
+
+    def get_all(self) -> dict[str, dict[str, Any]]:
+        """Get all artifacts."""
+        return {k: v["data"] for k, v in self._artifacts.items()}
+
+    def get_summary(self) -> str:
+        """Generate a human-readable summary of all artifacts for LLM analysis."""
+        lines = []
+        for agent_id, entry in self._artifacts.items():
+            data = entry["data"]
+            lines.append(f"=== {agent_id} ===")
+
+            if agent_id == "script":
+                outline = data.get("outline", "")
+                characters = data.get("characters", [])
+                episodes = data.get("episodes", [])
+                lines.append(f"Outline: {outline[:500]}")
+                lines.append(f"Characters: {[c.get('name', '') for c in characters]}")
+                lines.append(f"Episodes: {len(episodes)} episodes")
+                for ep in episodes[:3]:
+                    lines.append(f"  - Ep {ep.get('episode_no', '?')}: {ep.get('title', '')} ({len(ep.get('script', ''))} chars)")
+                if len(episodes) > 3:
+                    lines.append(f"  ... and {len(episodes) - 3} more episodes")
+
+            elif agent_id == "character":
+                chars = data.get("characters", [])
+                for c in chars[:5]:
+                    name = c.get("name", "?")
+                    appearance = c.get("appearance", {})
+                    if isinstance(appearance, dict):
+                        lines.append(f"  {name}: hair={appearance.get('hair', 'N/A')}, cloth={appearance.get('cloth', 'N/A')}")
+                    else:
+                        lines.append(f"  {name}: {str(appearance)[:100]}")
+
+            elif agent_id == "storyboard":
+                scenes = data.get("storyboard", [])
+                lines.append(f"Total scenes: {len(scenes)}")
+                for s in scenes[:5]:
+                    prompt = s.get("prompt", "")
+                    chars = s.get("characters", [])
+                    lines.append(f"  Scene {s.get('scene_no', '?')}: [{', '.join(chars)}] {prompt[:120]}")
+                if len(scenes) > 5:
+                    lines.append(f"  ... and {len(scenes) - 5} more scenes")
+
+            elif agent_id == "image":
+                images = data.get("images", [])
+                lines.append(f"Images generated: {len(images)}")
+                for img in images[:5]:
+                    lines.append(f"  Scene {img.get('scene_no', '?')}: {img.get('image_url', 'N/A')[:80]}")
+
+            elif agent_id == "voice":
+                audios = data.get("audios", [])
+                lines.append(f"Audio files: {len(audios)}")
+                for a in audios[:3]:
+                    lines.append(f"  Scene {a.get('scene_no', '?')}: duration={a.get('duration', 0):.1f}s")
+
+            elif agent_id == "video":
+                lines.append(f"Video path: {data.get('video_path', 'N/A')}")
+
+            else:
+                lines.append(json.dumps(data, ensure_ascii=False, default=str)[:300])
+
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def remove_from(self, agent_id: str):
+        """Remove artifacts from this step onward (for rollback)."""
+        idx = self.PIPELINE_ORDER.index(agent_id) if agent_id in self.PIPELINE_ORDER else 0
+        to_remove = [k for k in self._artifacts
+                     if k in self.PIPELINE_ORDER and self.PIPELINE_ORDER.index(k) >= idx]
+        for key in to_remove:
+            del self._artifacts[key]
+            self._execution_log.append({
+                "agent_id": key,
+                "action": "rollback_remove",
+                "timestamp": time.time(),
+            })
+        logger.info("Artifacts removed from step %s onward: %s", agent_id, to_remove)
+
+    def get_log(self) -> list[dict]:
+        return list(self._execution_log)
+
+
+class Director:
+    """The autonomous decision-making brain of the Agent OS."""
+
+    PIPELINE_ORDER = ["script", "character", "storyboard", "image", "voice", "video"]
+
+    def __init__(
+        self,
+        artifact_manager: ArtifactManager | None = None,
+        session_manager=None,
+        llm_call=None,
+        max_retries_per_step: int = 2,
+        max_total_decisions: int = 10,
+    ):
+        self.artifact_manager = artifact_manager or ArtifactManager()
+        self.session_manager = session_manager
+        self.llm_call = llm_call
+        self.max_retries_per_step = max_retries_per_step
+        self.max_total_decisions = max_total_decisions
+        self._step_retry_counts: dict[str, int] = {}
+        self._total_decisions: int = 0
+        self._decision_history: list[dict] = []
+        self.hooks = get_hook_dispatcher()
+
+    async def analyze_step(
+        self,
+        agent_id: str,
+        output: dict[str, Any] | None = None,
+        error: str | None = None,
+        validation_result: dict | None = None,
+        conversation_id: str = "",
+        trace_id: str = "",
+    ) -> DirectorVerdict:
+        start_time = time.time()
+
+        if output and not error:
+            self.artifact_manager.store(agent_id, output)
+
+        if not error and validation_result and not validation_result.get("validation_failed", False):
+            return self._make_verdict(
+                agent_id=agent_id,
+                decision=DirectorDecision.PROCEED,
+                reasoning="Step completed successfully, validation passed.",
+                latency=start_time,
+            )
+
+        retry_count = self._step_retry_counts.get(agent_id, 0)
+        if retry_count >= self.max_retries_per_step and not error:
+            return self._make_verdict(
+                agent_id=agent_id,
+                decision=DirectorDecision.PROCEED,
+                reasoning=f"Max retries ({self.max_retries_per_step}) exceeded.",
+                latency=start_time,
+                confidence=0.3,
+            )
+
+        if self._total_decisions >= self.max_total_decisions:
+            return self._make_verdict(
+                agent_id=agent_id,
+                decision=DirectorDecision.PROCEED,
+                reasoning=f"Max total decisions ({self.max_total_decisions}) reached.",
+                latency=start_time,
+                confidence=0.3,
+            )
+
+        if self.llm_call:
+            verdict = await self._llm_analyze(
+                agent_id=agent_id, output=output, error=error,
+                validation_result=validation_result,
+                conversation_id=conversation_id, trace_id=trace_id,
+            )
+        else:
+            verdict = self._rule_based_analyze(
+                agent_id=agent_id, output=output, error=error,
+                validation_result=validation_result,
+            )
+
+        verdict.analysis_latency_ms = (time.time() - start_time) * 1000
+        self._total_decisions += 1
+        self._step_retry_counts[agent_id] = retry_count + 1
+        self._decision_history.append(verdict.to_dict())
+
+        logger.info("Director verdict: %s -> %s (confidence=%.2f)",
+                     agent_id, verdict.decision.value, verdict.confidence)
+
+        await self.hooks.emit(HookEvent(
+            name="DIRECTOR_DECISION",
+            payload=verdict.to_dict(),
+            trace_id=trace_id, session_id="",
+            conversation_id=conversation_id, agent_id=agent_id,
+        ))
+
+        return verdict
+
+    async def _llm_analyze(
+        self, agent_id, output, error, validation_result, conversation_id, trace_id,
+    ) -> DirectorVerdict:
+        artifact_summary = self.artifact_manager.get_summary()
+        validation_info = json.dumps(validation_result, ensure_ascii=False, indent=2) if validation_result else ""
+        error_info = error or "No error (quality gate failed)"
+
+        # Build decision history context for the LLM
+        decision_history = ""
+        if self._decision_history:
+            recent = self._decision_history[-5:]
+            decision_history = "\n## Recent Decisions\n"
+            for d in recent:
+                decision_history += (
+                    f"- {d.get('agent_id', '?')}: {d.get('decision', '?')} "
+                    f"(confidence={d.get('confidence', 0):.2f}) — {d.get('reasoning', '')[:100]}\n"
+                )
+
+        # Build retry context
+        retry_count = self._step_retry_counts.get(agent_id, 0)
+        retry_info = f"\n## Retry Context\nCurrent step '{agent_id}' has been retried {retry_count} time(s). Max: {self.max_retries_per_step}"
+
+        # Pipeline position context
+        try:
+            idx = self.PIPELINE_ORDER.index(agent_id)
+            position = f"\n## Pipeline Position\nStep {idx + 1}/{len(self.PIPELINE_ORDER)}: {' -> '.join(self.PIPELINE_ORDER)}\nCurrent: **{agent_id}** (← already completed); Next: {self.PIPELINE_ORDER[idx + 1] if idx + 1 < len(self.PIPELINE_ORDER) else 'DONE'}"
+        except ValueError:
+            position = f"\nCurrent step: {agent_id}"
+
+        system_prompt = """You are the Director of an AI story generation pipeline. You have access to ALL artifacts produced so far and must make intelligent decisions.
+
+Output a JSON object with:
+{"decision": "proceed" | "retry" | "rollback" | "rewrite_prompt" | "skip" | "insert_step",
+"reasoning": "detailed explanation of WHY you chose this decision",
+"target_step": "rollback target agent_id (only for rollback)",
+"modified_prompt": "improved prompt with specific fixes (only for rewrite_prompt)",
+"insert_step_config": {"type": "step_type"} (only for insert_step),
+"confidence": 0.0-1.0}
+
+Decision guidelines:
+- PROCEED: Output is good quality, no issues detected.
+- RETRY: Transient failure (timeout, rate limit). Same inputs, try again.
+- ROLLBACK: Fundamental issue rooted in an EARLIER step. E.g., bad characters → bad storyboard. Set target_step to the problematic earlier step.
+- REWRITE_PROMPT: The current step's input needs improvement but the issue is not in an earlier step. Provide a concrete modified_prompt with specific fixes.
+- SKIP: Non-critical failure; the pipeline can continue without this step's output (e.g., voice generation fails but video can proceed silently).
+- INSERT_STEP: A remediation step is needed before continuing. E.g., character consistency check before image generation.
+
+IMPORTANT: Analyze the full artifact context to understand ROOT CAUSE before deciding. Don't just react to the error surface.
+Output ONLY JSON, no other text."""
+
+        user_prompt = f"""Analyze this pipeline step and decide what to do next.
+
+## Current Step: {agent_id}
+{position}{retry_info}
+{decision_history}
+
+## Error (if any): {error_info}
+
+## Quality Gate Validation:\n{validation_info or 'No validation result (step succeeded without quality gate failure)'}
+
+## All Artifacts Produced So Far:
+{artifact_summary}
+
+## Pipeline Flow: script -> character -> storyboard -> image -> voice -> video
+
+Respond with ONLY a JSON object containing your decision."""
+
+        try:
+            result = await self.llm_call(system_prompt=system_prompt, user_prompt=user_prompt, model="default")
+            content = result.get("content", "") if isinstance(result, dict) else str(result)
+            decision_data = self._extract_json(content)
+            if not decision_data:
+                return self._rule_based_analyze(agent_id, output, error, validation_result)
+            try:
+                decision = DirectorDecision(decision_data.get("decision", "proceed"))
+            except ValueError:
+                decision = DirectorDecision.PROCEED
+            return DirectorVerdict(
+                decision=decision, agent_id=agent_id,
+                reasoning=decision_data.get("reasoning", "LLM analysis"),
+                target_step=decision_data.get("target_step", ""),
+                modified_prompt=decision_data.get("modified_prompt", ""),
+                confidence=float(decision_data.get("confidence", 0.7)),
+            )
+        except Exception as e:
+            logger.error("Director LLM analysis failed: %s", e)
+            return self._rule_based_analyze(agent_id, output, error, validation_result)
+
+    def _rule_based_analyze(self, agent_id, output, error, validation_result) -> DirectorVerdict:
+        retry_count = self._step_retry_counts.get(agent_id, 0)
+
+        if error:
+            error_lower = error.lower()
+            transient_kw = ["timeout", "rate limit", "connection", "503", "502", "429"]
+            if any(kw in error_lower for kw in transient_kw):
+                if retry_count < self.max_retries_per_step:
+                    return self._make_verdict(agent_id=agent_id, decision=DirectorDecision.RETRY,
+                                                          reasoning=f"Transient error: {error[:100]}", confidence=0.9)
+            if agent_id in ("image", "voice") and retry_count >= 1:
+                return self._make_verdict(agent_id=agent_id, decision=DirectorDecision.SKIP,
+                                                          reasoning=f"{agent_id} failed after retry, skipping.", confidence=0.7)
+            if retry_count < self.max_retries_per_step:
+                return self._make_verdict(agent_id=agent_id, decision=DirectorDecision.RETRY,
+                                                          reasoning=f"Agent error: {error[:100]}", confidence=0.6)
+
+        if validation_result and validation_result.get("validation_failed"):
+            errors = validation_result.get("errors", [])
+            fix_suggestion = validation_result.get("fix_suggestion", "")
+
+            if agent_id == "storyboard" and retry_count >= 1:
+                script_art = self.artifact_manager.get("script")
+                if script_art:
+                    episodes = script_art.get("episodes", [])
+                    if not episodes or len(episodes) < 1:
+                        return self._make_verdict(agent_id=agent_id, decision=DirectorDecision.ROLLBACK,
+                                                          target_step="script", reasoning="Script has no episodes.", confidence=0.8)
+
+            if agent_id == "storyboard" and any("character" in e.lower() for e in errors):
+                char_art = self.artifact_manager.get("character")
+                if not char_art or not char_art.get("characters"):
+                    return self._make_verdict(agent_id=agent_id, decision=DirectorDecision.ROLLBACK,
+                                                          target_step="character", reasoning="Missing character data.", confidence=0.8)
+
+            if fix_suggestion and retry_count < self.max_retries_per_step:
+                return self._make_verdict(agent_id=agent_id, decision=DirectorDecision.REWRITE_PROMPT,
+                                                          reasoning=f"Quality gate failed: {'; '.join(errors[:3])}",
+                                                          modified_prompt=fix_suggestion, confidence=0.7)
+            if retry_count < self.max_retries_per_step:
+                return self._make_verdict(agent_id=agent_id, decision=DirectorDecision.RETRY,
+                                                          reasoning=f"Quality gate failed: {'; '.join(errors[:3])}", confidence=0.6)
+
+        return self._make_verdict(agent_id=agent_id, decision=DirectorDecision.PROCEED,
+                                          reasoning="No significant issues.", confidence=0.9)
+
+    def _make_verdict(self, agent_id, decision, reasoning, target_step="",
+                       modified_prompt="", confidence=0.7, latency=0.0) -> DirectorVerdict:
+        return DirectorVerdict(decision=decision, agent_id=agent_id, reasoning=reasoning,
+                              target_step=target_step, modified_prompt=modified_prompt,
+                              confidence=confidence)
+
+    @staticmethod
+    def _extract_json(text: str) -> dict | None:
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except json.JSONDecodeError:
+                pass
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+        return None
+
+    def reset_retry_count(self, agent_id: str):
+        self._step_retry_counts[agent_id] = 0
 
     def get_stats(self) -> dict:
-        """Get Director statistics."""
         return {
-            "enabled": self._enabled,
-            "total_decisions": len(self._decision_log),
-            "by_type": self._count_by_type(),
+            "total_decisions": self._total_decisions,
+            "step_retries": dict(self._step_retry_counts),
+            "artifacts_stored": len(self.artifact_manager.get_all()),
+            "decision_history": self._decision_history[-10:],
         }
 
-    def _count_by_type(self) -> dict[str, int]:
-        counts = {}
-        for d in self._decision_log:
-            t = d["decision"]
-            counts[t] = counts.get(t, 0) + 1
-        return counts
+
+def create_director_hook(director: Director) -> HookHandler:
+    """Create a hook handler that triggers Director analysis after each agent step."""
+    async def handler(event: HookEvent):
+        if event.name != hook_events.AFTER_AGENT:
+            return
+        agent_id = event.payload.get("agent_id", "")
+        output = event.payload.get("output", {})
+        error = event.payload.get("error")
+        validation_result = event.payload.get("validation_result")
+        verdict = await director.analyze_step(
+            agent_id=agent_id, output=output, error=error,
+            validation_result=validation_result,
+            conversation_id=event.conversation_id, trace_id=event.trace_id,
+        )
+        event.payload["director_verdict"] = verdict.to_dict()
+    return handler

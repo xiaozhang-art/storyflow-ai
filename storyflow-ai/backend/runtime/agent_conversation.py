@@ -1,254 +1,390 @@
-"""Agent Conversation Bus - Enables agents to discuss and negotiate like a team.
+"""Agent Conversation Bus - A2A (Agent-to-Agent) structured message passing.
 
-Instead of agents only communicating via the Blackboard, the ConversationBus
-allows the Director to initiate discussions between agents:
+Unlike simple state dict passing, A2A messages carry semantic meaning:
+- CONTEXT: What was produced (summary of output for downstream awareness)
+- FEEDBACK: What went wrong or could be improved
+- CONSTRAINT: What the receiving agent must respect
+- HANDOFF: Formal transfer of control from one agent to the next
 
-    Director: ImageAgent, why did you fail?
-    Image: The character doesn't look right.
-    Director: Storyboard, is the prompt too simple?
-    Storyboard: I suggest adding "long hair" and "white dress".
-    Director: Image, redraw with the improved prompt.
-
-This is built on top of EventBus and uses asyncio for async message passing.
+This enables agents to truly communicate rather than just reading
+a flat state dictionary.
 """
-
-import asyncio
+from __future__ import annotations
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Callable, Coroutine
-
-from runtime.event_bus import EventBus, EventType, get_event_bus
+from typing import Any, Optional
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 
-class MessageType(str, Enum):
-    """Types of agent messages."""
-    REQUEST = "request"
-    RESPONSE = "response"
-    INFORM = "inform"  # Fire-and-forget notification
-    BROADCAST = "broadcast"  # To all agents
+# Valid message types in A2A communication
+MSG_CONTEXT = "context"
+MSG_FEEDBACK = "feedback"
+MSG_CONSTRAINT = "constraint"
+MSG_HANDOFF = "handoff"
 
 
-@dataclass
-class AgentMessage:
-    """A message between agents."""
-    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-    conversation_id: str = ""
+class A2AMessage(BaseModel):
+    """A structured A2A message between agents.
+
+    Each message carries semantic type information so the receiving
+    agent understands not just WHAT data was produced but HOW to use it.
+    """
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     from_agent: str = ""
-    to_agent: str = ""  # Empty = broadcast
-    message_type: MessageType = MessageType.REQUEST
+    to_agent: str = ""
+    message_type: str = MSG_HANDOFF
     content: str = ""
-    data: dict = field(default_factory=dict)
-    timestamp: float = field(default_factory=time.time)
-    reply_to: str = ""  # ID of the message this replies to
+    context: dict[str, Any] = Field(default_factory=dict)
+    constraints: list[str] = Field(default_factory=list)
+    feedback: list[str] = Field(default_factory=list)
+    artifacts: list[str] = Field(default_factory=list)
+    timestamp: float = Field(default_factory=lambda: time.time())
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "conversation_id": self.conversation_id,
-            "from_agent": self.from_agent,
-            "to_agent": self.to_agent,
-            "message_type": self.message_type.value,
-            "content": self.content,
-            "data": self.data,
-            "timestamp": self.timestamp,
-            "reply_to": self.reply_to,
-        }
-
-
-# Agent message handler type
-AgentMessageHandler = Callable[[AgentMessage], Coroutine[Any, Any, str]]
+        return self.model_dump(mode="json")
 
 
 class AgentConversationBus:
-    """Message bus for inter-agent communication.
+    """Manages A2A message passing between pipeline agents.
 
-    Agents register handlers for their name. When a message is sent
-    to an agent, the handler is called and the response is collected.
-
-    The Director uses this bus to coordinate multi-agent discussions.
+    Stores messages per conversation and provides:
+    - Structured message creation (build_handoff_message)
+    - Message retrieval for an agent
+    - Conversation history for LLM context injection
+    - Automatic context/constraint extraction based on agent type
     """
 
-    def __init__(self, event_bus: EventBus | None = None):
-        self.event_bus = event_bus or get_event_bus()
-        self._handlers: dict[str, AgentMessageHandler] = {}
-        self._conversations: dict[str, list[AgentMessage]] = {}
-        self._pending_replies: dict[str, asyncio.Future] = {}
-        self._stats = {
-            "messages_sent": 0,
-            "messages_received": 0,
-            "conversations_started": 0,
-            "responses_timeout": 0,
-        }
+    # Constraint templates: what each agent transition requires
+    CONSTRAINT_TEMPLATES = {
+        ("script", "character"): [
+            "Use the exact characters defined in the script output",
+            "Maintain character personalities and roles as specified",
+            "Preserve character relationships and dynamics",
+        ],
+        ("character", "storyboard"): [
+            "Maintain character visual appearance consistency in all scene descriptions",
+            "Include character appearance features (hair, face, body, clothing) in scene prompts",
+            "Each scene must reference characters by name with their visual features",
+        ],
+        ("storyboard", "image"): [
+            "Use the exact image prompts from the storyboard",
+            "Maintain character visual consistency across all images",
+            "Preserve scene mood, lighting, and camera angles",
+        ],
+        ("image", "voice"): [
+            "Match voice tone to the scene mood and character personality",
+            "Voice duration should match storyboard scene duration",
+            "If character dialogue exists, match voice gender to character gender",
+        ],
+        ("voice", "video"): [
+            "Use all provided image and audio files",
+            "Video duration must match total audio duration",
+            "Maintain scene order as defined in storyboard",
+        ],
+    }
 
-    def register_agent(self, agent_name: str,
-                       handler: AgentMessageHandler) -> None:
-        """Register a message handler for an agent."""
-        self._handlers[agent_name] = handler
-        logger.info("ConversationBus: %s registered for messages", agent_name)
+    def __init__(self):
+        # conversation_id -> list of A2AMessages
+        self._messages: dict[str, list[A2AMessage]] = {}
 
-    def unregister_agent(self, agent_name: str) -> None:
-        self._handlers.pop(agent_name, None)
-
-    # ── Conversation management ──
-
-    def start_conversation(
-        self, participants: list[str], topic: str = ""
-    ) -> str:
-        """Start a new multi-agent conversation."""
-        conv_id = uuid.uuid4().hex[:12]
-        self._conversations[conv_id] = []
-        self._stats["conversations_started"] += 1
-        logger.info(
-            "ConversationBus: started conversation %s with %s (topic: %s)",
-            conv_id, participants, topic,
-        )
-        return conv_id
-
-    def get_conversation_history(self, conv_id: str) -> list[AgentMessage]:
-        return list(self._conversations.get(conv_id, []))
-
-    # ── Message sending ──
-
-    async def send(self, message: AgentMessage) -> None:
-        """Send a message (fire-and-forget, no response expected)."""
-        self._store_message(message)
-        self._stats["messages_sent"] += 1
-
-        await self.event_bus.publish_event(
-            EventType.AGENT_MESSAGE,
-            data=message.to_dict(),
-            source=f"conversation_bus:{message.from_agent}",
+    def send_message(self, msg: A2AMessage, conversation_id: str = ""):
+        """Store an A2A message."""
+        cid = conversation_id or msg.metadata.get("conversation_id", "")
+        if not cid:
+            cid = "_default"
+        if cid not in self._messages:
+            self._messages[cid] = []
+        self._messages[cid].append(msg)
+        logger.debug(
+            "A2A [%s]: %s -> %s (%s) | %s",
+            msg.message_type, msg.from_agent, msg.to_agent,
+            cid[:8], msg.content[:80],
         )
 
-        if message.to_agent and message.to_agent in self._handlers:
-            try:
-                await self._handlers[message.to_agent](message)
-                self._stats["messages_received"] += 1
-            except Exception as e:
-                logger.error(
-                    "ConversationBus: handler for %s failed: %s",
-                    message.to_agent, e)
-        elif message.to_agent:
-            logger.warning(
-                "ConversationBus: no handler for agent '%s'",
-                message.to_agent)
+    def get_messages_for(self, agent_id: str, conversation_id: str = "") -> list[A2AMessage]:
+        """Get pending messages for an agent."""
+        cid = conversation_id or "_default"
+        messages = self._messages.get(cid, [])
+        return [m for m in messages
+                if m.to_agent == agent_id
+                and not m.metadata.get("delivered", False)]
 
-    async def request(
-        self, from_agent: str, to_agent: str, content: str,
-        conversation_id: str = "", data: dict | None = None,
-        timeout: float = 30.0,
-    ) -> AgentMessage | None:
-        """Send a request and wait for a response."""
-        msg = AgentMessage(
+    def mark_delivered(self, agent_id: str, conversation_id: str = ""):
+        """Mark all messages for an agent as delivered."""
+        cid = conversation_id or "_default"
+        for msg in self._messages.get(cid, []):
+            if msg.to_agent == agent_id:
+                msg.metadata["delivered"] = True
+
+    def get_conversation_history(self, conversation_id: str = "") -> list[A2AMessage]:
+        """Get full conversation history."""
+        cid = conversation_id or "_default"
+        return list(self._messages.get(cid, []))
+
+    def get_summary(self, conversation_id: str = "") -> str:
+        """Format conversation as text for LLM context injection."""
+        cid = conversation_id or "_default"
+        messages = self._messages.get(cid, [])
+        if not messages:
+            return ""
+        lines = ["## A2A Agent Communication History"]
+        for msg in messages:
+            lines.append(f"### {msg.from_agent} -> {msg.to_agent} ({msg.message_type})")
+            if msg.content:
+                lines.append(f"\n{msg.content}")
+            if msg.constraints:
+                lines.append(f"\n**Constraints:**")
+                for c in msg.constraints:
+                    lines.append(f"- {c}")
+            if msg.feedback:
+                lines.append(f"\n**Feedback:**")
+                for f in msg.feedback:
+                    lines.append(f"- {f}")
+            lines.append("")
+        return "\n".join(lines)
+
+    def clear_for_conversation(self, conversation_id: str = ""):
+        """Clear all messages for a conversation."""
+        cid = conversation_id or "_default"
+        self._messages.pop(cid, None)
+
+    def build_handoff_message(
+        self,
+        from_agent: str,
+        to_agent: str,
+        state: dict,
+        agent_output: dict,
+        validation_result: dict | None = None,
+        error: str | None = None,
+        conversation_id: str = "",
+    ) -> A2AMessage:
+        """Build a structured handoff message from one agent to the next.
+
+        V1.5 A2A upgrade: Carries rich structured context, not just summaries:
+        - context: Rich dict with character profiles, scene data, style hints
+        - constraints: What the next agent must respect (template + dynamic)
+        - feedback: Quality issues, warnings, fix suggestions from quality gate
+        - artifacts: References to produced files (image URLs, audio URLs)
+        - metadata: Step timing, retry count, validation score
+        """
+        context_data = self._extract_rich_context(from_agent, state, agent_output)
+        constraints = self._get_constraints(from_agent, to_agent, state, agent_output)
+        feedback = self._extract_feedback(from_agent, validation_result, error)
+        artifacts = self._extract_artifacts(from_agent, agent_output)
+
+        # Build human-readable content summary
+        content = f"Handoff from {from_agent} to {to_agent}."
+        summary = context_data.get("summary", "")
+        if summary:
+            content += f"\n\nProduced: {summary}"
+        if error:
+            content += f"\n\nError occurred: {error}"
+
+        return A2AMessage(
             from_agent=from_agent,
             to_agent=to_agent,
-            message_type=MessageType.REQUEST,
+            message_type=MSG_HANDOFF,
             content=content,
-            conversation_id=conversation_id,
-            data=data or {},
+            context=context_data,
+            constraints=constraints,
+            feedback=feedback,
+            artifacts=artifacts,
+            metadata={
+                "conversation_id": conversation_id,
+                "from_step": from_agent,
+                "to_step": to_agent,
+                "timestamp": time.time(),
+                "validation_score": (validation_result or {}).get("passed", True),
+            },
         )
 
-        # Create future for the reply
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
-        self._pending_replies[msg.id] = future
+    def _extract_rich_context(self, agent_id: str, state: dict, output: dict) -> dict:
+        """Build rich structured context based on which agent produced output.
 
-        await self.send(msg)
-
-        try:
-            reply = await asyncio.wait_for(future, timeout=timeout)
-            return reply
-        except asyncio.TimeoutError:
-            self._stats["responses_timeout"] += 1
-            logger.warning(
-                "ConversationBus: timeout waiting for %s to reply to %s",
-                to_agent, from_agent)
-            return None
-        finally:
-            self._pending_replies.pop(msg.id, None)
-
-    async def reply(self, original_message: AgentMessage,
-                    content: str, data: dict | None = None) -> None:
-        """Reply to a received message."""
-        reply_msg = AgentMessage(
-            conversation_id=original_message.conversation_id,
-            from_agent=original_message.to_agent,
-            to_agent=original_message.from_agent,
-            message_type=MessageType.RESPONSE,
-            content=content,
-            data=data or {},
-            reply_to=original_message.id,
-        )
-        await self.send(reply_msg)
-
-        # Resolve pending future if this is a response to a request
-        future = self._pending_replies.get(original_message.id)
-        if future and not future.done():
-            future.set_result(reply_msg)
-
-    # ── Director convenienced methods ──
-
-    async def director_ask(
-        self, agent_name: str, question: str,
-        conversation_id: str = "", context: dict | None = None,
-        timeout: float = 30.0,
-    ) -> str:
-        """Director asks an agent a question, returns the text response."""
-        response = await self.request(
-            from_agent="director", to_agent=agent_name,
-            content=question, conversation_id=conversation_id,
-            data=context or {}, timeout=timeout,
-        )
-        if response:
-            return response.content
-        return "(no response)"
-
-    async def director_investigate(
-        self,
-        failed_step: str,
-        error: str,
-        agents_to_ask: list[str],
-        conversation_id: str = "",
-    ) -> dict[str, str]:
-        """Director investigates a failure by asking multiple agents.
-
-        Returns a dict of {agent_name: response_text}.
+        V1.5 upgrade: Returns a dict with structured data for the next agent,
+        not just a text summary. This enables the receiving agent to access
+        precise character profiles, scene data, and style information.
         """
-        results = {}
-        tasks = []
-        for agent_name in agents_to_ask:
-            question = (
-                f"The '{failed_step}' step failed with: {error}\n"
-                f"From your perspective as the {agent_name} agent, "
-                f"what do you think went wrong and how should we fix it? "
-                f"Be specific and actionable."
+        ctx: dict[str, Any] = {}
+
+        if agent_id == "script":
+            outline = state.get("outline", "")
+            chars = state.get("characters", [])
+            eps = state.get("episodes", [])
+            ctx["summary"] = (
+                f"Outline: {outline[:300]}; "
+                f"Characters: {', '.join(c.get('name', '') for c in chars)}; "
+                f"Episodes: {len(eps)} total"
             )
-            tasks.append(self.director_ask(
-                agent_name, question, conversation_id, timeout=20.0))
+            # Structured character list for character_agent
+            ctx["character_names"] = [c.get("name", "") for c in chars]
+            ctx["character_roles"] = {
+                c.get("name", ""): c.get("role", "")
+                for c in chars if c.get("name")
+            }
+            # Episode summaries for downstream reference
+            ctx["episode_summaries"] = [
+                {
+                    "episode_no": e.get("episode_no", i + 1),
+                    "title": e.get("title", ""),
+                    "summary": e.get("summary", "")[:200],
+                }
+                for i, e in enumerate(eps)
+            ]
 
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        for agent_name, resp in zip(agents_to_ask, responses):
-            if isinstance(resp, Exception):
-                results[agent_name] = f"(error: {resp})"
-            else:
-                results[agent_name] = resp
+        elif agent_id == "character":
+            chars = state.get("characters", [])
+            ctx["summary"] = (
+                f"{len(chars)} character profiles enriched with visual features: "
+                f"{', '.join(c.get('name', '') for c in chars)}"
+            )
+            # Full character appearance profiles for storyboard/image agents
+            ctx["character_profiles"] = []
+            for c in chars:
+                name = c.get("name", "")
+                appearance = c.get("appearance", {})
+                if isinstance(appearance, dict):
+                    ctx["character_profiles"].append({
+                        "name": name,
+                        "gender": c.get("gender", "unknown"),
+                        "appearance": appearance,
+                        "personality": c.get("personality", {}),
+                    })
+                else:
+                    ctx["character_profiles"].append({
+                        "name": name,
+                        "appearance_text": str(appearance) if appearance else "",
+                    })
 
-        return results
+        elif agent_id == "storyboard":
+            scenes = state.get("storyboard", [])
+            ctx["summary"] = (
+                f"{len(scenes)} scenes storyboarded with image prompts, "
+                f"camera angles, and dialogue"
+            )
+            # Scene data for image agent: prompt + camera + mood per scene
+            ctx["scene_count"] = len(scenes)
+            ctx["scenes"] = [
+                {
+                    "scene_no": s.get("scene_no", i + 1),
+                    "prompt": s.get("prompt", ""),
+                    "camera": s.get("camera", ""),
+                    "mood": s.get("mood", ""),
+                    "characters": s.get("characters", []),
+                    "duration": s.get("duration", 5),
+                }
+                for i, s in enumerate(scenes)
+            ]
+            # Character-to-scene mapping for consistency
+            char_scenes: dict[str, list[int]] = {}
+            for i, s in enumerate(scenes):
+                for ch in s.get("characters", []):
+                    char_scenes.setdefault(ch, []).append(s.get("scene_no", i + 1))
+            ctx["character_scene_map"] = char_scenes
 
-    # ── Internal ──
+        elif agent_id == "image":
+            images = output.get("images", [])
+            total = output.get("_storyboard_count", len(images))
+            ctx["summary"] = f"{len(images)}/{total} images generated"
+            ctx["image_urls"] = [
+                {"scene_no": img.get("scene_no"), "url": img.get("image_url", "")}
+                for img in images
+            ]
+            ctx["generation_stats"] = {
+                "success": len(images),
+                "total": total,
+                "coverage": len(images) / max(total, 1),
+            }
 
-    def _store_message(self, message: AgentMessage) -> None:
-        if message.conversation_id:
-            conv = self._conversations.setdefault(message.conversation_id, [])
-            conv.append(message)
+        elif agent_id == "voice":
+            audios = output.get("audios", [])
+            ctx["summary"] = f"{len(audios)} audio files generated"
+            ctx["audio_urls"] = [
+                {"scene_no": a.get("scene_no"), "url": a.get("audio_url", ""),
+                 "duration": a.get("duration", 0)}
+                for a in audios
+            ]
+            ctx["total_duration"] = sum(a.get("duration", 0) for a in audios)
+
+        elif agent_id == "video":
+            ctx["summary"] = f"Video composed: {state.get('video_path', 'N/A')}"
+            ctx["video_path"] = state.get("video_path", "")
+
+        else:
+            ctx["summary"] = f"{agent_id} completed"
+
+        return ctx
+
+    def _extract_artifacts(self, agent_id: str, output: dict) -> list[str]:
+        """Extract artifact references (file URLs) from agent output."""
+        artifacts = []
+        if agent_id == "image":
+            for img in output.get("images", []):
+                url = img.get("image_url", "")
+                if url:
+                    artifacts.append(f"image:{img.get('scene_no', '?')}:{url}")
+        elif agent_id == "voice":
+            for aud in output.get("audios", []):
+                url = aud.get("audio_url", "")
+                if url:
+                    artifacts.append(f"audio:{aud.get('scene_no', '?')}:{url}")
+        elif agent_id == "video":
+            path = output.get("video_path", "") or output.get("video_url", "")
+            if path:
+                artifacts.append(f"video:final:{path}")
+        return artifacts
+
+    def _get_constraints(
+        self, from_agent: str, to_agent: str, state: dict, output: dict,
+    ) -> list[str]:
+        """Get constraints for the next agent based on the transition."""
+        key = (from_agent, to_agent)
+        template = self.CONSTRAINT_TEMPLATES.get(key, [])
+        constraints = list(template)
+
+        # Add character consistency constraint for visual agents
+        if to_agent in ("storyboard", "image"):
+            chars = state.get("characters", [])
+            if chars:
+                names = [c.get("name", "") for c in chars]
+                constraints.append(
+                    f"Characters in scenes: {', '.join(names)} - maintain visual consistency"
+                )
+        if to_agent == "storyboard":
+            ep_count = len(state.get("episodes", []))
+            constraints.append(f"Storyboard must cover all {ep_count} episodes")
+
+        return constraints
+
+    def _extract_feedback(
+        self, agent_id: str,
+        validation_result: dict | None,
+        error: str | None,
+    ) -> list[str]:
+        """Extract feedback/suggestions from quality gate results."""
+        feedback = []
+        if error:
+            feedback.append(f"Previous step error: {error[:200]}")
+        errors = []
+        warnings = []
+        if validation_result:
+            errors = validation_result.get("errors", [])
+            warnings = validation_result.get("warnings", [])
+        if errors:
+            feedback.extend([f"Quality issue: {e}" for e in errors])
+        if warnings:
+            feedback.extend([f"Warning: {w}" for w in warnings[:3]])
+        fix = (validation_result or {}).get("fix_suggestion", "")
+        if fix:
+            feedback.append(f"Suggestion: {fix[:300]}")
+        return feedback
 
     def get_stats(self) -> dict:
-        stats = dict(self._stats)
-        stats["registered_agents"] = list(self._handlers.keys())
-        stats["active_conversations"] = len(self._conversations)
-        stats["pending_replies"] = len(self._pending_replies)
-        return stats
+        return {
+            "total_messages": sum(len(v) for v in self._messages.values()),
+            "conversations": len(self._messages),
+        }

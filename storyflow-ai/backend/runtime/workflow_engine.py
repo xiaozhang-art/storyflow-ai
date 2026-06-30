@@ -1,912 +1,481 @@
-"""Workflow Engine - Executes pipeline steps with full Runtime support.
+"""Workflow Engine - Orchestrates the story pipeline with Director decisions and A2A communication.
 
-The WorkflowEngine is the core execution loop of the Runtime. It:
-    1. Loads pipeline definition from YAML DSL or uses default
-    2. Planner decomposes into a task DAG (V2.5+)
-    3. For each step:
-       a. Run before-hooks (can modify context)
-       b. Call the agent function
-       c. Save artifacts
-       d. Update the Blackboard
-       e. Run after-hooks (can validate/retry)
-       f. Run quality checks
-       g. Director reviews and may intervene
-       h. Publish events
-    4. Supports parallel execution for steps in the same parallel_group
-    5. Session tracking enables partial regeneration
+Replaces RuntimeWorkflowRunner with these V1.5 capabilities:
+1. Director integration: LLM-based analysis after each step with 5 decision types
+2. ROLLBACK: Go back to a previous step and re-execute from there
+3. MODIFY_AND_RETRY (REWRITE_PROMPT): Inject improved prompt and re-run
+4. A2A messages: Structured context/feedback/constraint passing between agents
+5. StoryMemory integration: Query memory before each step for context
 """
-
 from __future__ import annotations
-
-import asyncio
 import logging
-import traceback
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, Coroutine
+import time
+from typing import Any, Callable, Awaitable, Optional
 
-import yaml
-
-from runtime.event_bus import EventBus, EventType, Event
-from runtime.blackboard import Blackboard
-from runtime.artifact_manager import ArtifactManager
-from runtime.session_manager import SessionManager, Session, SessionStatus, get_session_manager
-from runtime.hooks import HookFramework, StepContext, HookAbort, ErrorAction
-from runtime.director import DirectorAgent, Decision, DecisionType
-from runtime.quality import QualityEngine
-from runtime.retry_engine import RetryEngine
-from runtime.memory import MemoryRuntime
-from runtime.trace import TraceRuntime
+from runtime.director import (
+    Director, DirectorDecision, DirectorVerdict, ArtifactManager, create_director_hook,
+)
+from runtime.hook.dispatcher import HookEvent, get_hook_dispatcher
+from runtime.hook import events as hook_events
 
 logger = logging.getLogger(__name__)
 
-
-# Agent function type: takes state dict, returns result dict
-AgentFunc = Callable[[dict], Coroutine[Any, Any, dict]]
-
-
-@dataclass
-class PipelineStep:
-    """Definition of a single step in a pipeline."""
-    name: str
-    agent: str = ""
-    agent_func: AgentFunc | None = None
-    depends_on: list[str] = field(default_factory=list)
-    required_artifacts: list[str] = field(default_factory=list)
-    produces_artifacts: list[str] = field(default_factory=list)
-    description: str = ""
-    parallel_group: str = ""  # Steps in the same group run concurrently
-
-
-@dataclass
-class DSLWorkflow:
-    """A workflow loaded from a YAML DSL file."""
-    name: str
-    description: str
-    version: str
-    steps: list[PipelineStep]
-    quality_config: dict = field(default_factory=dict)
-    director_config: dict = field(default_factory=dict)
-
-    @classmethod
-    def from_yaml(cls, yaml_path: str) -> "DSLWorkflow":
-        """Load a workflow definition from a YAML file."""
-        path = Path(yaml_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Workflow DSL not found: {yaml_path}")
-
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-
-        steps = []
-        for step_data in data.get("steps", []):
-            steps.append(PipelineStep(
-                name=step_data.get("id", step_data.get("name", "")),
-                agent=step_data.get("agent", step_data.get("id", "")),
-                depends_on=step_data.get("depends_on", []),
-                description=step_data.get("description", ""),
-                required_artifacts=step_data.get("input", []),
-                produces_artifacts=step_data.get("output", []),
-                parallel_group=step_data.get("parallel_group", ""),
-            ))
-
-        return cls(
-            name=data.get("name", "unnamed"),
-            description=data.get("description", ""),
-            version=data.get("version", "1.0"),
-            steps=steps,
-            quality_config=data.get("quality", {}),
-            director_config=data.get("director", {}),
-        )
-
-    def get_execution_order(self) -> list[list[str]]:
-        """Get steps grouped by execution wave (for parallel execution).
-
-        Returns a list of waves, where each wave is a list of step names
-        that can run in parallel.
-        """
-        step_map = {s.name: s for s in self.steps}
-        completed = set()
-        waves = []
-        max_iterations = len(self.steps) + 1
-
-        while len(completed) < len(self.steps) and max_iterations > 0:
-            wave = []
-            for step in self.steps:
-                if step.name in completed:
-                    continue
-                if all(dep in completed for dep in step.depends_on):
-                    wave.append(step.name)
-            if not wave:
-                break
-            waves.append(wave)
-            completed.update(wave)
-            max_iterations -= 1
-
-        return waves
+LegacyAgentFunc = Callable[[dict], Awaitable[dict] | dict]
 
 
 class WorkflowEngine:
-    """Executes pipeline workflows with full Runtime support.
+    """Orchestrates the story generation pipeline with Director brain and A2A communication.
 
-    Features:
-        - YAML DSL workflow definitions
-        - DAG-based parallel execution
-        - Before/after/error hooks
-        - Artifact management
-        - Blackboard state
-        - EventBus notifications
-        - Retry with exponential backoff
-        - Director-driven decision making
-        - Quality engine integration
-        - Session tracking for partial regeneration
+    Pipeline: script -> character -> storyboard -> image -> voice -> video
+
+    After each step, the Director analyzes output and decides:
+    - PROCEED: continue to next step
+    - RETRY: re-run current step with same inputs
+    - ROLLBACK: go back to a previous step, remove artifacts, re-execute
+    - REWRITE_PROMPT: modify prompt/state and re-run current step
+    - SKIP: log warning, continue to next step
+
+    Additionally, between steps, A2A messages carry structured context,
+    constraints, and feedback to the next agent.
     """
-
-    # Default pipeline (used when no DSL is loaded)
-    DEFAULT_PIPELINE = [
-        "script", "character", "storyboard", "image", "image_to_video", "voice", "video",
-    ]
+    PIPELINE_ORDER = ["script", "character", "storyboard", "image", "voice", "video"]
+    MAX_ROLLBACKS = 2
+    STEP_PROGRESS = {
+        "init": 0, "script": 10, "character": 25, "storyboard": 40,
+        "image": 65, "voice": 80, "video": 95, "done": 100,
+    }
 
     def __init__(
         self,
-        event_bus: EventBus | None = None,
+        director: Director | None = None,
         artifact_manager: ArtifactManager | None = None,
-        session_manager: SessionManager | None = None,
-        hooks: HookFramework | None = None,
-        director: DirectorAgent | None = None,
-        quality_engine: QualityEngine | None = None,
-        retry_engine: RetryEngine | None = None,
-        memory: MemoryRuntime | None = None,
-        trace: TraceRuntime | None = None,
-        reflection: Any | None = None,
-        prompt_runtime: Any | None = None,
-        memory_graph: Any | None = None,
-        max_retries: int = 3,
+        conversation_bus=None,
+        story_memory=None,
+        hook_dispatcher=None,
     ):
-        self.event_bus = event_bus or EventBus()
-        self.artifact_manager = artifact_manager or ArtifactManager()
-        self.session_manager = session_manager or get_session_manager()
-        self.hooks = hooks or HookFramework()
         self.director = director
-        self.quality_engine = quality_engine
-        self.retry_engine = retry_engine or RetryEngine()
-        self.memory = memory or MemoryRuntime()
-        self.trace = trace or TraceRuntime()
-        self.reflection = reflection
-        self.prompt_runtime = prompt_runtime
-        self.memory_graph = memory_graph
-        self.max_retries = max_retries
+        self.artifact_manager = artifact_manager or (director.artifact_manager if director else ArtifactManager())
+        self.conversation_bus = conversation_bus
+        self.story_memory = story_memory
+        self.hooks = hook_dispatcher or get_hook_dispatcher()
+        self._registered_agents: dict[str, LegacyAgentFunc] = {}
+        self._rollback_count = 0
+        self._insert_step_registry: dict[str, Callable] = {}
 
-        # Registry: step_name → agent function
-        self._agents: dict[str, AgentFunc] = {}
+    def register_insert_step(self, step_type: str, func: Callable):
+        """Register a custom insert step function.
 
-        # Registry: step_name → PipelineStep definition
-        self._steps: dict[str, PipelineStep] = {}
-
-        # Loaded DSL workflow (if any)
-        self._dsl: DSLWorkflow | None = None
-
-    def register_agent(self, name: str, agent_func: AgentFunc,
-                       required_artifacts: list[str] | None = None,
-                       produces_artifacts: list[str] | None = None,
-                       description: str = ""):
-        """Register an agent function for a pipeline step.
-
-        This is how agents are plugged into the Runtime without modifying
-        any existing agent code.
-        """
-        self._agents[name] = agent_func
-        self._steps[name] = PipelineStep(
-            name=name,
-            agent=name,
-            agent_func=agent_func,
-            required_artifacts=required_artifacts or [],
-            produces_artifacts=produces_artifacts or [name],
-            description=description or f"{name} agent",
-        )
-        logger.info("Registered agent: %s", name)
-
-    def load_dsl(self, yaml_path: str):
-        """Load a workflow definition from a YAML DSL file.
-
-        The DSL defines the pipeline steps, dependencies, parallel groups,
-        quality config, and director config. Agent functions must still be
-        registered separately via register_agent().
-        """
-        self._dsl = DSLWorkflow.from_yaml(yaml_path)
-        logger.info("Loaded DSL workflow: %s (v%s, %d steps)",
-                     self._dsl.name, self._dsl.version, len(self._dsl.steps))
-
-        # Merge DSL step definitions into the step registry
-        for step in self._dsl.steps:
-            if step.name not in self._steps:
-                self._steps[step.name] = step
-
-        # Apply DSL config
-        if self._dsl.quality_config.get("enabled"):
-            logger.info("Quality checks enabled for steps: %s",
-                        self._dsl.quality_config.get("check_after", []))
-
-    def get_pipeline(self, session_id: str) -> list[str]:
-        """Get the linear pipeline steps for a session.
-
-        Priority:
-        1. Session metadata pipeline (from Planner)
-        2. DSL-defined steps
-        3. DEFAULT_PIPELINE
-        """
-        session = self.session_manager.get(session_id)
-        if session and session.metadata.get("pipeline"):
-            return session.metadata["pipeline"]
-
-        if self._dsl:
-            # Flatten DSL steps to linear order respecting dependencies
-            waves = self._dsl.get_execution_order()
-            return [step for wave in waves for step in wave]
-
-        return list(self.DEFAULT_PIPELINE)
-
-    def get_execution_waves(self, session_id: str) -> list[list[str]]:
-        """Get execution waves for parallel execution.
-
-        Returns a list of waves, where each wave is a list of step names
-        that can run in parallel.
-        """
-        if self._dsl:
-            waves = self._dsl.get_execution_order()
-            # Filter out already-completed steps
-            session = self.session_manager.get(session_id)
-            if session:
-                waves = [
-                    [s for s in wave if not self.session_manager.is_step_completed(session_id, s)]
-                    for wave in waves
-                ]
-                waves = [w for w in waves if w]
-            return waves
-
-        # No DSL: return linear pipeline as single-step waves
-        pipeline = self.get_pipeline(session_id)
-        return [[step] for step in pipeline]
-
-    async def run(self, session_id: str, initial_state: dict | None = None) -> dict:
-        """Execute the full pipeline for a session.
-
-        Supports parallel execution when a DSL is loaded with parallel_groups.
+        Insert steps are remediation actions the Director can request.
+        Built-in types: 'consistency_check', 'style_extract', 'character_verify'
 
         Args:
-            session_id: Session to run
-            initial_state: Initial state (prompt, genre, etc.)
+            step_type: Unique identifier for the insert step type.
+            func: async function(state, verdict) -> dict
+        """
+        self._insert_step_registry[step_type] = func
+        logger.info("[WorkflowEngine] Insert step registered: %s", step_type)
+
+    async def _store_to_story_memory(
+        self, agent_id: str, output: dict, state: dict, conversation_id: str,
+    ):
+        """Store step output to StoryMemory for downstream agents.
+
+        Phase 3 integration: After each successful step, persist key
+        information into the appropriate memory dimension.
+        """
+        try:
+            if agent_id == "character":
+                await self.story_memory.populate_from_state(state, conversation_id)
+            elif agent_id == "storyboard":
+                for scene in state.get("storyboard", []):
+                    await self.story_memory.store_scene(scene, conversation_id)
+            elif agent_id == "image":
+                for img in output.get("images", []):
+                    await self.story_memory.store_visual(
+                        scene_no=img.get("scene_no", 0),
+                        image_url=img.get("image_url", ""),
+                        image_prompt=img.get("prompt", ""),
+                        conversation_id=conversation_id,
+                    )
+            logger.debug("[StoryMemory] Stored %s output to memory", agent_id)
+        except Exception as e:
+            logger.warning("[StoryMemory] Store failed for %s: %s", agent_id, e)
+
+    def register_agent(self, agent_id: str, agent_func: LegacyAgentFunc):
+        """Register an agent function for the pipeline."""
+        self._registered_agents[agent_id] = agent_func
+        logger.info("[WorkflowEngine] Agent registered: %s", agent_id)
+
+    async def run_pipeline(
+        self,
+        task_id: str,
+        story_id: str,
+        prompt: str,
+        genre: str,
+        progress_callback=None,
+        persist_callback=None,
+        conversation_id: str = "",
+        trace_id: str = "",
+    ) -> dict:
+        """Execute the full story pipeline with Director brain and A2A messages.
+
+        Args:
+            task_id: Task tracking ID.
+            story_id: Story database ID.
+            prompt: User's creative prompt.
+            genre: Story genre.
+            progress_callback: Async callback(step, progress_dict).
+            persist_callback: Async callback(step, state) for DB persistence.
+            conversation_id: Conversation ID for A2A tracking.
+            trace_id: Trace ID for observability.
 
         Returns:
-            Final state dict with all results
+            Final state dict with all pipeline results.
         """
-        session = self.session_manager.get(session_id)
-        if not session:
-            raise ValueError(f"Session {session_id} not found")
+        # Build A2A conversation ID if not provided
+        if not conversation_id:
+            import uuid as _uuid
+            conversation_id = _uuid.uuid4().hex[:16]
 
-        # Initialize blackboard
-        blackboard = Blackboard(session_id=session_id, event_bus=self.event_bus)
-        if initial_state:
-            for key, value in initial_state.items():
-                blackboard.set(key, value, notify=False)
+        # Initial state
+        state: dict[str, Any] = {
+            "task_id": task_id, "story_id": story_id,
+            "prompt": prompt, "genre": genre,
+            "outline": "", "characters": [],
+            "episodes": [], "storyboard": [],
+            "images": [], "audios": [],
+            "video_path": "",
+            "current_step": "init", "status": "running", "error": "",
+        }
 
-        self.session_manager.update_status(session_id, SessionStatus.RUNNING)
+        pipeline = list(self.PIPELINE_ORDER)
+        available = [a for a in pipeline if a in self._registered_agents]
+        if not available:
+            raise ValueError("No agents registered with WorkflowEngine")
 
-        # Start trace
-        trace_id = self.trace.start_trace(
-            session_id,
-            metadata={"prompt": state.get("prompt", ""), "genre": state.get("genre", "")},
-        )
-        root_span = self.trace._traces[trace_id].root_span if trace_id in self.trace._traces else None
-
-        # Populate memory from initial state
-        self.memory.session_id = session_id
-        self.memory.populate_from_state(state)
-
-        if session.completed_steps:
-            logger.info("Session %s resuming from step %s (completed: %s)",
-                        session_id,
-                        session.current_step or session.completed_steps[-1],
-                        session.completed_steps)
-
-        state = dict(initial_state or {})
-
-        try:
-            # Check if parallel execution is possible (DSL loaded)
-            waves = self.get_execution_waves(session_id)
-            is_parallel = any(len(wave) > 1 for wave in waves)
-
-            if is_parallel:
-                result_state = await self._run_parallel(session_id, waves, state, blackboard)
-            else:
-                # Linear execution (original behavior)
-                pipeline = self.get_pipeline(session_id)
-                result_state = await self._run_linear(session_id, pipeline, state, blackboard)
-
-            self.session_manager.update_status(session_id, SessionStatus.COMPLETED)
-
-            # End trace
-            if root_span:
-                self.trace.end_span(
-                    root_span.span_id,
-                    status="completed",
-                    output_summary={"steps_completed": len(session.completed_steps)},
-                )
-
-            await self.event_bus.publish_event(
-                EventType.SESSION_COMPLETED,
-                data={"session_id": session_id},
-                session_id=session_id,
-                source="workflow_engine",
+        # Send A2A messages between steps
+        async def _send_a2a(
+            from_agent: str, to_agent: str,
+            step_output: dict, validation_result: dict | None,
+            step_error: str | None,
+        ):
+            if not self.conversation_bus:
+                return
+            from runtime.agent_conversation import AgentConversationBus
+            msg = self.conversation_bus.build_handoff_message(
+                from_agent=from_agent, to_agent=to_agent,
+                state=state, agent_output=step_output,
+                validation_result=validation_result,
+                error=step_error,
+                conversation_id=conversation_id,
             )
-            logger.info("Session %s completed successfully", session_id)
-            return result_state
-
-        except Exception as e:
-            error_msg = f"{type(e).__name__}: {str(e)}"
-            logger.error("Session %s failed at step %s: %s",
-                         session_id, session.current_step, error_msg)
-            self.session_manager.fail_session(session_id, session.current_step, error_msg)
-            await self.event_bus.publish_event(
-                EventType.SESSION_FAILED,
-                data={"session_id": session_id, "error": error_msg,
-                      "step": session.current_step},
-                session_id=session_id,
-                source="workflow_engine",
-            )
-            raise
-
-    async def _run_linear(self, session_id: str, pipeline: list[str],
-                          state: dict, blackboard: Blackboard) -> dict:
-        """Execute pipeline steps sequentially."""
-        for step_name in pipeline:
-            if self.session_manager.is_step_completed(session_id, step_name):
-                logger.info("Skipping completed step: %s", step_name)
-                continue
-
-            result = await self._execute_step(
-                session_id=session_id,
-                step_name=step_name,
-                state=state,
-                blackboard=blackboard,
+            self.conversation_bus.send_message(msg, conversation_id)
+            logger.info(
+                "[A2A] %s -> %s: %s",
+                from_agent, to_agent, msg.message_type,
             )
 
-            if result:
-                state.update(result)
-                blackboard.update(result)
+        # Main pipeline execution loop
+        pipeline_idx = 0
+        while pipeline_idx < len(available):
+            agent_id = available[pipeline_idx]
+            next_agent_id = available[pipeline_idx + 1] if pipeline_idx + 1 < len(available) else ""
+            agent_func = self._registered_agents[agent_id]
+            start_time = time.time()
+            retry = False
+            skip = False
 
-            self.session_manager.complete_step(session_id, step_name)
-            self.artifact_manager.save_checkpoint(session_id, step_name, state)
+            # Phase 3: Inject StoryMemory context
+            if self.story_memory:
+                try:
+                    memory_ctx = await self.story_memory.get_context(agent_id, state)
+                    if memory_ctx:
+                        state["_story_memory_context"] = memory_ctx
+                        logger.debug("[StoryMemory] Injected context for %s (%d chars)",
+                                     agent_id, len(memory_ctx))
+                except Exception as e:
+                    logger.warning("[StoryMemory] Context injection failed for %s: %s", agent_id, e)
 
-        return state
+            # Phase 2: Inject A2A messages into state for next agent
+            if self.conversation_bus and self.conversation_bus.get_messages_for(agent_id, conversation_id):
+                a2a_msgs = self.conversation_bus.get_messages_for(agent_id, conversation_id)
+                constraints_list = []
+                for m in a2a_msgs:
+                    constraints_list.extend(m.constraints)
+                    if m.feedback:
+                        state["_a2a_feedback"] = "; ".join(m.feedback)
+                if constraints_list:
+                    state["_a2a_constraints"] = constraints_list
+                self.conversation_bus.mark_delivered(agent_id, conversation_id)
+                a2a_summary = self.conversation_bus.get_summary(conversation_id)
+                if a2a_summary:
+                    state["_a2a_history"] = a2a_summary
 
-    async def _run_parallel(self, session_id: str, waves: list[list[str]],
-                            state: dict, blackboard: Blackboard) -> dict:
-        """Execute pipeline steps in waves, with parallelism within each wave."""
-        for wave in waves:
-            if not wave:
-                continue
+            # Emit BEFORE_AGENT hook
+            await self.hooks.emit(HookEvent(
+                name=hook_events.BEFORE_AGENT,
+                payload={"agent_id": agent_id, "story_id": story_id, "step": agent_id},
+                trace_id=trace_id, session_id="",
+                conversation_id=conversation_id, agent_id=agent_id,
+            ))
 
-            if len(wave) == 1:
-                # Single step: run like linear
-                step_name = wave[0]
-                if self.session_manager.is_step_completed(session_id, step_name):
-                    logger.info("Skipping completed step: %s", step_name)
-                    continue
+            step_error = None
+            step_output = None
+            validation_result = None
 
-                result = await self._execute_step(
-                    session_id=session_id,
-                    step_name=step_name,
-                    state=state,
-                    blackboard=blackboard,
-                )
-                if result:
+            for attempt in range(3):  # max 3 attempts (1 initial + 2 retries)
+                retry = False
+                skip = False
+
+                try:
+                    result = await agent_func(state)
+                    if not isinstance(result, dict):
+                        result = {"result": result}
                     state.update(result)
-                    blackboard.update(result)
-                self.session_manager.complete_step(session_id, step_name)
-                self.artifact_manager.save_checkpoint(session_id, step_name, state)
-            else:
-                # Multiple steps: run in parallel
-                logger.info("Running parallel wave: %s", wave)
-                results = await asyncio.gather(
-                    *[self._execute_step(
-                        session_id=session_id,
-                        step_name=step_name,
-                        state=dict(state),  # Pass copy to avoid race conditions
-                        blackboard=blackboard,
-                    ) for step_name in wave],
-                    return_exceptions=True,
+                    step_output = result
+
+                    latency = (time.time() - start_time) * 1000
+
+                    # Emit AFTER_AGENT hook (sync so quality gate + director run)
+                    after_event = HookEvent(
+                        name=hook_events.AFTER_AGENT,
+                        payload={
+                        "agent_id": agent_id, "success": True,
+                        "adapter": False,
+                        "output": step_output,
+                        "latency_ms": latency,
+                    },
+                    trace_id=trace_id, session_id="",
+                    conversation_id=conversation_id,
+                    agent_id=agent_id,
                 )
+                    await self.hooks.emit_sync(after_event)
 
-                for step_name, result in zip(wave, results):
-                    if isinstance(result, Exception):
-                        logger.error("Parallel step %s failed: %s", step_name, result)
-                        raise result
-                    if result:
-                        state.update(result)
-                        blackboard.update(result)
-                    self.session_manager.complete_step(session_id, step_name)
-                    self.artifact_manager.save_checkpoint(session_id, step_name, state)
+                    validation_result = after_event.payload.get("validation_result", {})
+                    validation_failed = after_event.payload.get("validation_failed", False)
 
-        return state
-
-    async def run_single_step(self, session_id: str, step_name: str,
-                              state: dict, blackboard: Blackboard | None = None) -> dict:
-        """Execute a single step (for partial regeneration)."""
-        if blackboard is None:
-            blackboard = Blackboard(session_id=session_id, event_bus=self.event_bus)
-            blackboard.set_all(state)
-
-        return await self._execute_step(
-            session_id=session_id,
-            step_name=step_name,
-            state=state,
-            blackboard=blackboard,
-        )
-
-    async def _execute_step(self, session_id: str, step_name: str,
-                             state: dict, blackboard: Blackboard) -> dict:
-        """Execute a single pipeline step with hooks, retry, quality, and director.
-
-        Execution flow:
-            1. Build StepContext
-            2. Run before-hooks
-            3. Call agent function
-            4. Save artifacts
-            5. Update blackboard
-            6. Run after-hooks
-            7. Run quality checks (if enabled)
-            8. Director reviews (if enabled)
-            9. Handle errors with retry logic
-        """
-        agent_func = self._agents.get(step_name)
-        if not agent_func:
-            logger.warning("No agent registered for step '%s', skipping", step_name)
-            return {}
-
-        context = StepContext(
-            step_name=step_name,
-            session_id=session_id,
-            blackboard=blackboard,
-            artifact_manager=self.artifact_manager,
-            extra=state,
-        )
-
-        self.session_manager.start_step(session_id, step_name)
-
-        await self.event_bus.publish_event(
-            EventType.STEP_STARTED,
-            data={"step": step_name, "attempt": context.attempt},
-            session_id=session_id,
-            source="workflow_engine",
-        )
-
-        # Start trace span for this step
-        step_span = self.trace.start_span(
-            name=step_name,
-            trace_id=session_id,
-            step=step_name,
-            input_summary={"attempt": 1},
-        )
-
-        attempt = 0
-        last_error = None
-
-        while attempt < self.max_retries:
-            attempt += 1
-            context.attempt = attempt
-            last_error = None
-
-            try:
-                # Run before-hooks
-                context = await self.hooks.run_before(context)
-
-                # Call the agent (with memory context)
-                agent_input = dict(context.extra)
-                memory_ctx = self.memory.build_context(step_name, state=agent_input)
-                if memory_ctx:
-                    agent_input["_memory_context"] = memory_ctx
-
-                # V1.5: Enrich prompts via PromptRuntime before calling agent
-                if self.prompt_runtime:
-                    agent_input = await self._enrich_agent_input(
-                        step_name, agent_input, session_id, blackboard
+                    # Phase 1: Director analysis
+                    verdict = await self.director.analyze_step(
+                        agent_id=agent_id,
+                        output=step_output,
+                        error=None,
+                        validation_result=validation_result,
+                        conversation_id=conversation_id,
+                        trace_id=trace_id,
                     )
 
-                logger.info("[Session %s] Executing step '%s' (attempt %d/%d)",
-                            session_id, step_name, attempt, self.max_retries)
-                result = await agent_func(agent_input)
+                    # Execute Director decision
+                    if verdict.decision == DirectorDecision.PROCEED:
+                        self.director.reset_retry_count(agent_id)
+                        break
 
-                # Save artifacts
-                await self._save_step_artifacts(session_id, step_name, result)
-
-                # Run after-hooks (may raise HookAbort for retry)
-                result = await self.hooks.run_after(context, result)
-
-                # Quality check (if enabled for this step)
-                if self.quality_engine and self._should_quality_check(step_name):
-                    qr = await self.quality_engine.check(
-                        step_name, result, context=state, session_id=session_id
-                    )
-                    if not qr.passed and self.director and self.director.enabled:
-                        # Let Director decide what to do
-                        decision = await self.director.decide_on_quality_fail(
-                            step_name, qr, session_id
+                    if verdict.decision == DirectorDecision.RETRY:
+                        logger.info(
+                            "[Director] RETRY %s (attempt %d): %s",
+                            agent_id, attempt + 1, verdict.reasoning[:100],
                         )
-                        if decision.type == DecisionType.RETRY and attempt < self.max_retries:
-                            logger.warning("[Session %s] Director retry for '%s': %s",
-                                           session_id, step_name, decision.reason)
-                            await self.event_bus.publish_event(
-                                EventType.STEP_RETRY,
-                                data={"step": step_name, "attempt": attempt,
-                                      "reason": decision.reason},
-                                session_id=session_id,
-                                source="director",
-                            )
-                            continue
-                        elif decision.type == DecisionType.CONTINUE:
-                            logger.info("[Session %s] Director says continue despite quality fail",
-                                        session_id)
-                        elif decision.type == DecisionType.ROLLBACK:
-                            logger.warning("[Session %s] Director requests rollback to %s",
-                                           session_id, decision.target_step)
-                            # In linear mode, rollback is handled at a higher level
-                            # For now, log and continue
-                        elif decision.type == DecisionType.SKIP:
-                            logger.info("[Session %s] Director skips step '%s'",
-                                        session_id, step_name)
-                            return {}
-
-                # Update memory from step result
-                self.memory.populate_from_state(result)
-                self.memory.session.step_name = step_name
-                self.memory.session.attempt = attempt
-
-                # V1.5: Populate MemoryGraph from step results
-                if self.memory_graph:
-                    try:
-                        if step_name == "script":
-                            self.memory_graph.populate_from_script(result)
-                        elif step_name == "character":
-                            self.memory_graph.populate_from_character_update(result)
-                        elif step_name == "storyboard":
-                            self.memory_graph.populate_from_storyboard(result)
-                    except Exception as mg_err:
-                        logger.debug("MemoryGraph populate error: %s", mg_err)
-
-                # V1.5: Run Reflection after step completes
-                if self.reflection and self.reflection.enabled:
-                    try:
-                        reflection_result = await self.reflection.reflect(
-                            step_name=step_name,
-                            result=result,
-                            state=state,
-                            session_id=session_id,
-                            quality_result=qr if 'qr' in dir() else None,
-                        )
-                        # Store reflection on blackboard for downstream steps
-                        blackboard.set(
-                            f"reflections.{step_name}",
-                            reflection_result.to_dict(),
-                        )
-                        # If reflection has suggestions, inject into
-                        # PromptRuntime for the next step
-                        if (self.prompt_runtime
-                                and reflection_result.suggestion):
-                            next_step_suggestions = (
-                                reflection_result.get_suggestions_text()
-                            )
-                            self.prompt_runtime.set_director_instruction(
-                                step_name, next_step_suggestions
-                            )
-                    except Exception as ref_err:
-                        logger.debug(
-                            "Reflection error for '%s': %s",
-                            step_name, ref_err)
-
-                # End trace span
-                if step_span:
-                    self.trace.end_span(
-                        step_span.span_id,
-                        status="completed",
-                        output_summary={"keys": list(result.keys()) if isinstance(result, dict) else []},
-                    )
-
-                # Notify: step completed
-                await self.event_bus.publish_event(
-                    EventType.STEP_COMPLETED,
-                    data={"step": step_name, "attempt": attempt},
-                    session_id=session_id,
-                    source="workflow_engine",
-                )
-
-                logger.info("[Session %s] Step '%s' completed", session_id, step_name)
-                return result if isinstance(result, dict) else {}
-
-            except HookAbort as e:
-                if e.retry and attempt < self.max_retries:
-                    logger.warning("[Session %s] Hook requested retry for '%s': %s",
-                                   session_id, step_name, e)
-                    if e.fallback_data is not None:
-                        return e.fallback_data if isinstance(e.fallback_data, dict) else {}
-                    await self.event_bus.publish_event(
-                        EventType.STEP_RETRY,
-                        data={"step": step_name, "attempt": attempt, "reason": str(e)},
-                        session_id=session_id,
-                        source="hooks",
-                    )
-                    continue
-                else:
-                    logger.error("[Session %s] Hook abort (no retry): %s", session_id, e)
-                    raise
-
-            except Exception as e:
-                last_error = e
-                logger.error("[Session %s] Step '%s' failed (attempt %d): %s",
-                             session_id, step_name, attempt, e)
-
-                # End trace span (failed)
-                if step_span:
-                    self.trace.end_span(
-                        step_span.span_id,
-                        status="failed",
-                        error=str(e),
-                        retry_count=attempt - 1,
-                    )
-
-                # Consult Director if available
-                if self.director and self.director.enabled:
-                    decision = await self.director.decide_on_error(
-                        step_name, e, state
-                    )
-                    if decision.type == DecisionType.RETRY and attempt < self.max_retries:
-                        wait_time = min(2 ** attempt, 10)
-                        logger.info("[Session %s] Director retry for '%s' in %ds",
-                                    session_id, step_name, wait_time)
-                        await self.event_bus.publish_event(
-                            EventType.STEP_RETRY,
-                            data={"step": step_name, "attempt": attempt,
-                                  "reason": decision.reason, "wait": wait_time},
-                            session_id=session_id,
-                            source="director",
-                        )
-                        await asyncio.sleep(wait_time)
+                        await self.hooks.emit(HookEvent(
+                            name=hook_events.ON_RETRY,
+                            payload={
+                                "agent_id": agent_id, "attempt": attempt + 1,
+                                "max_retries": self.director.max_retries_per_step,
+                                "reasoning": verdict.reasoning,
+                            },
+                            trace_id=trace_id, agent_id=agent_id,
+                        ))
+                        retry = True
                         continue
-                    elif decision.type == DecisionType.SKIP:
-                        logger.warning("[Session %s] Director skips '%s': %s",
-                                       session_id, step_name, decision.reason)
-                        return {}
-                    elif decision.type == DecisionType.ABORT:
-                        logger.error("[Session %s] Director aborts: %s",
-                                     session_id, decision.reason)
-                        raise RuntimeError(decision.reason) from e
 
-                # No Director or Director says continue: use hook-based error handling
-                action = await self.hooks.run_on_error(context, e)
+                    if verdict.decision == DirectorDecision.REWRITE_PROMPT:
+                        logger.info(
+                            "[Director] REWRITE_PROMPT %s: %s",
+                            agent_id, verdict.reasoning[:100],
+                        )
+                        if verdict.modified_prompt:
+                            state["_retry_hint"] = verdict.modified_prompt
+                        await self.hooks.emit(HookEvent(
+                            name=hook_events.ON_RETRY,
+                            payload={
+                                "agent_id": agent_id, "attempt": attempt + 1,
+                                "reasoning": "REWRITE_PROMPT",
+                                "modified_prompt": verdict.modified_prompt[:200],
+                            },
+                            trace_id=trace_id, agent_id=agent_id,
+                        ))
+                        retry = True
+                        continue
 
-                if action == ErrorAction.RETRY and attempt < self.max_retries:
-                    wait_time = min(2 ** attempt, 10)
-                    logger.info("[Session %s] Retrying '%s' in %ds (attempt %d)",
-                                session_id, step_name, wait_time, attempt)
-                    await self.event_bus.publish_event(
-                        EventType.STEP_RETRY,
-                        data={"step": step_name, "attempt": attempt,
-                              "reason": str(e), "wait": wait_time},
-                        session_id=session_id,
-                        source="workflow_engine",
+                    if verdict.decision == DirectorDecision.SKIP:
+                        logger.warning(
+                            "[Director] SKIP %s: %s", agent_id, verdict.reasoning[:100],
+                        )
+                        skip = True
+                        break
+
+                    if verdict.decision == DirectorDecision.ROLLBACK:
+                        target = verdict.target_step or "character"
+                        logger.warning(
+                            "[Director] ROLLBACK from %s to %s (attempt %d): %s",
+                            agent_id, target, self._rollback_count + 1, verdict.reasoning[:100],
+                        )
+                        await self.hooks.emit(HookEvent(
+                            name="DIRECTOR_ROLLBACK",
+                            payload={
+                                "from": agent_id, "target": target,
+                                "reasoning": verdict.reasoning,
+                            },
+                            trace_id=trace_id, agent_id=agent_id,
+                        ))
+                        self._rollback_count += 1
+
+                        if self._rollback_count > self.MAX_ROLLBACKS:
+                            logger.error("[Director] Max rollbacks (%d) exceeded, proceeding", self.MAX_ROLLBACKS)
+                            break
+
+                        # Remove artifacts from target step onward
+                        self.artifact_manager.remove_from(target)
+                        # Reset retry counts for affected steps
+                        target_idx = self.PIPELINE_ORDER.index(target) if target in self.PIPELINE_ORDER else 0
+                        for aff_agent in self.PIPELINE_ORDER[target_idx:]:
+                            self.director.reset_retry_count(aff_agent)
+                        # Clear A2A messages for affected steps
+                        if self.conversation_bus:
+                            for aff_agent in self.PIPELINE_ORDER[target_idx:]:
+                                pending = self.conversation_bus.get_messages_for(aff_agent, conversation_id)
+                                for p in pending:
+                                    p.metadata["delivered"] = True
+
+                        # Rollback pipeline index
+                        pipeline_idx = target_idx - 1
+                        logger.info(
+                            "[Director] Pipeline rolled back to index %d (%s)",
+                            pipeline_idx, self.PIPELINE_ORDER[pipeline_idx] if pipeline_idx >= 0 else "done",
+                        )
+                        break
+
+                    if verdict.decision == DirectorDecision.INSERT_STEP:
+                        logger.info("[Director] INSERT_STEP requested for %s", agent_id)
+                        insert_config = verdict.insert_step_config or {}
+                        insert_type = insert_config.get("type", "consistency_check")
+                        insert_func = self._insert_step_registry.get(insert_type)
+
+                        if insert_func:
+                            try:
+                                logger.info(
+                                    "[Director] Executing insert step '%s' before %s",
+                                    insert_type, agent_id,
+                                )
+                                insert_result = await insert_func(state, verdict)
+                                if isinstance(insert_result, dict):
+                                    state.update(insert_result)
+                                await self.hooks.emit(HookEvent(
+                                    name="DIRECTOR_INSERT_STEP",
+                                    payload={
+                                        "agent_id": agent_id,
+                                        "insert_type": insert_type,
+                                        "insert_result": insert_result,
+                                    },
+                                    trace_id=trace_id, agent_id=agent_id,
+                                ))
+                            except Exception as insert_err:
+                                logger.error(
+                                    "[Director] Insert step '%s' failed: %s",
+                                    insert_type, insert_err,
+                                )
+                        else:
+                            logger.warning(
+                                "[Director] Unknown insert step type: %s, skipping",
+                                insert_type,
+                            )
+                        break
+
+                    # Unknown decision — proceed
+                    break
+
+                except Exception as e:
+                    step_error = f"{type(e).__name__}: {str(e)}"
+                    logger.error("[WorkflowEngine] Agent %s failed: %s", agent_id, step_error[:200])
+
+                    await self.hooks.emit(HookEvent(
+                        name=hook_events.ON_ERROR,
+                        payload={"agent_id": agent_id, "error": step_error},
+                        trace_id=trace_id, agent_id=agent_id,
+                    ))
+
+                    # Let Director analyze the error
+                    error_verdict = await self.director.analyze_step(
+                        agent_id=agent_id, output=None, error=step_error,
+                        validation_result=None,
+                        conversation_id=conversation_id, trace_id=trace_id,
                     )
-                    await asyncio.sleep(wait_time)
-                    continue
-                elif action == ErrorAction.CONTINUE:
-                    logger.warning("[Session %s] Error hook says continue, skipping '%s'",
-                                   session_id, step_name)
-                    return {}
-                elif action == ErrorAction.FALLBACK:
-                    logger.warning("[Session %s] Using fallback for '%s'",
-                                   session_id, step_name)
-                    return {}
-                else:
-                    raise
+                    if error_verdict.decision == DirectorDecision.SKIP:
+                        logger.warning("[Director] Skipping failed %s", agent_id)
+                        skip = True
+                        break
+                    # Default: let the outer loop handle it
 
-        # All retries exhausted
-        raise RuntimeError(
-            f"Step '{step_name}' failed after {self.max_retries} attempts. "
-            f"Last error: {last_error}"
+            # After step completion (or skip)
+            if skip:
+                logger.warning("[WorkflowEngine] Skipped step %s", agent_id)
+            else:
+                # Store artifact
+                if step_output:
+                    self.artifact_manager.store(agent_id, step_output)
+
+                # Send A2A handoff message to next agent
+                if next_agent_id:
+                    await _send_a2a(
+                        from_agent=agent_id, to_agent=next_agent_id,
+                        step_output=step_output or {},
+                        validation_result=validation_result,
+                        step_error=step_error,
+                    )
+
+            # Incremental persistence
+            if persist_callback and not skip:
+                try:
+                    await persist_callback(agent_id, state)
+                except Exception as e:
+                    logger.warning("[WorkflowEngine] Persist failed for %s: %s", agent_id, e)
+
+            # Progress report
+            if progress_callback:
+                pct = self.STEP_PROGRESS.get(agent_id, 0)
+                await progress_callback(agent_id, {
+                    "task_id": task_id, "progress": pct,
+                    "current_step": agent_id,
+                    "message": f"{agent_id} completed (WorkflowEngine v1.5)",
+                })
+
+            # Only advance if we didn't rollback
+            if not retry and not skip and verdict.decision != DirectorDecision.ROLLBACK:
+                # Phase 3: Store step output to StoryMemory after successful step
+                if self.story_memory and step_output and not skip:
+                    await self._store_to_story_memory(
+                        agent_id, step_output, state, conversation_id,
+                    )
+                pipeline_idx += 1
+
+        # Final cleanup
+        state.pop("_retry_hint", None)
+        state.pop("_story_memory_context", None)
+        state.pop("_a2a_feedback", None)
+        state.pop("_a2a_constraints", None)
+        state.pop("_a2a_history", None)
+        state.pop("_character_consistency", None)
+        state.pop("_existing_character_profiles", None)
+        state.pop("_character_profiles_for_verify", None)
+        state.pop("_consistency_warnings", None)
+
+        logger.info(
+            "[WorkflowEngine] Pipeline completed | task=%s | director_decisions=%d | rollbacks=%d",
+            task_id, self.director._total_decisions, self._rollback_count,
         )
-
-    def _should_quality_check(self, step_name: str) -> bool:
-        """Check if quality checks are enabled for this step."""
-        if not self.quality_engine or not self.quality_engine.enabled:
-            return False
-        if self._dsl and self._dsl.quality_config.get("enabled"):
-            check_after = self._dsl.quality_config.get("check_after", [])
-            return step_name in check_after
-        return True  # Default: check all steps
-
-    async def _save_step_artifacts(self, session_id: str, step_name: str, result: dict):
-        """Save step results as artifacts."""
-        if not result:
-            return
-
-        # Save the full step result as JSON
-        self.artifact_manager.save_json(session_id, step_name, result)
-
-        # Save specific artifacts based on step type
-        if step_name == "script" and "episodes" in result:
-            self.artifact_manager.save_json(
-                session_id, "script", result["episodes"], "episodes.json")
-        elif step_name == "character" and "characters" in result:
-            self.artifact_manager.save_json(
-                session_id, "character", result["characters"], "characters.json")
-        elif step_name == "storyboard" and "storyboard" in result:
-            self.artifact_manager.save_json(
-                session_id, "storyboard", result["storyboard"], "scenes.json")
-
-        await self.event_bus.publish_event(
-            EventType.ARTIFACT_SAVED,
-            data={"step": step_name, "type": "json"},
-            session_id=session_id,
-            source="workflow_engine",
-        )
-
-    async def _enrich_agent_input(
-        self,
-        step_name: str,
-        agent_input: dict,
-        session_id: str,
-        blackboard: "Blackboard",
-    ) -> dict:
-        """Enrich agent input using PromptRuntime + Reflection suggestions.
-
-        For the 'image' step, this builds an enriched prompt for each scene
-        by combining:
-            - The original scene prompt (from storyboard)
-            - Character appearance details (from Memory)
-            - Reflection suggestions from previous steps (storyboard, character)
-            - Director instructions
-
-        The enriched prompts are stored in agent_input['_enriched_scene_prompts']
-        as a dict mapping scene_no → enriched_prompt.
-
-        For other steps, the general PromptRuntime.build_prompt() is used
-        to enrich the '_memory_context' field.
-        """
-        if step_name == "image":
-            return await self._enrich_image_prompts(
-                agent_input, session_id, blackboard
-            )
-        elif step_name == "storyboard":
-            return await self._enrich_storyboard_input(
-                agent_input, session_id, blackboard
-            )
-        elif step_name == "character":
-            return await self._enrich_character_input(
-                agent_input, session_id, blackboard
-            )
-        return agent_input
-
-    async def _enrich_image_prompts(
-        self,
-        agent_input: dict,
-        session_id: str,
-        blackboard: "Blackboard",
-    ) -> dict:
-        """Build enriched prompts for each scene in the image step.
-
-        Uses PromptRuntime.build_image_prompt() which combines:
-            - Character appearance constraints
-            - Reflection suggestions from storyboard/character steps
-            - World environment settings
-            - The original scene prompt
-        """
-        storyboard = agent_input.get("storyboard", [])
-        if not storyboard:
-            return agent_input
-
-        # Extract character names from storyboard scenes
-        all_char_names: list[str] = []
-        characters = agent_input.get("characters", [])
-        if characters:
-            all_char_names = [c.get("name", "") for c in characters if c.get("name")]
-
-        # Also pick up names mentioned in scenes
-        for scene in storyboard:
-            for name in scene.get("characters", []):
-                if isinstance(name, str) and name not in all_char_names:
-                    all_char_names.append(name)
-
-        enriched_prompts: dict[int, str] = {}
-        for scene in storyboard:
-            scene_no = scene.get("scene_no", 0)
-            original_prompt = scene.get("prompt", "")
-            if not original_prompt:
-                continue
-
-            enriched = self.prompt_runtime.build_image_prompt(
-                scene_prompt=original_prompt,
-                character_names=all_char_names,
-                state=agent_input,
-                session_id=session_id,
-            )
-            enriched_prompts[scene_no] = enriched
-
-        if enriched_prompts:
-            agent_input["_enriched_scene_prompts"] = enriched_prompts
-            logger.info(
-                "[Session %s] PromptRuntime enriched %d scene prompts "
-                "(reflection-aware)",
-                session_id, len(enriched_prompts),
-            )
-
-            # Publish event for observability
-            await self.event_bus.publish_event(
-                EventType.PROMPT_BUILT,
-                data={
-                    "step": "image",
-                    "scenes_enriched": list(enriched_prompts.keys()),
-                },
-                session_id=session_id,
-                source="workflow_engine",
-            )
-
-        return agent_input
-
-    async def _enrich_storyboard_input(
-        self,
-        agent_input: dict,
-        session_id: str,
-        blackboard: "Blackboard",
-    ) -> dict:
-        """Enrich storyboard agent input with reflection suggestions."""
-        if not self.prompt_runtime.reflection:
-            return agent_input
-
-        accumulated = self.prompt_runtime.reflection.get_accumulated_context(
-            session_id
-        )
-        if accumulated:
-            agent_input["_reflection_context"] = accumulated
-            logger.info(
-                "[Session %s] Injected reflection context into "
-                "storyboard input (%d chars)",
-                session_id, len(accumulated),
-            )
-        return agent_input
-
-    async def _enrich_character_input(
-        self,
-        agent_input: dict,
-        session_id: str,
-        blackboard: "Blackboard",
-    ) -> dict:
-        """Enrich character agent input with reflection suggestions."""
-        if not self.prompt_runtime.reflection:
-            return agent_input
-
-        # Get script reflection specifically (character step follows script)
-        script_ref = self.prompt_runtime.reflection.get_reflection(
-            session_id, "script"
-        )
-        if script_ref and script_ref.suggestion:
-            agent_input["_reflection_suggestions"] = script_ref.suggestion
-            logger.info(
-                "[Session %s] Injected %d script reflection suggestions "
-                "into character input",
-                session_id, len(script_ref.suggestion),
-            )
-        return agent_input
+        return state
 
     def get_stats(self) -> dict:
-        """Get workflow engine statistics."""
-        stats = {
-            "registered_agents": list(self._agents.keys()),
-            "pipeline": self.DEFAULT_PIPELINE,
+        return {
+            "director": self.director.get_stats() if self.director else {},
+            "artifacts": len(self.artifact_manager.get_all()),
+            "rollback_count": self._rollback_count,
         }
-        if self._dsl:
-            stats["dsl"] = {
-                "name": self._dsl.name,
-                "version": self._dsl.version,
-                "steps": len(self._dsl.steps),
-                "quality_enabled": self._dsl.quality_config.get("enabled", False),
-            }
-        return stats

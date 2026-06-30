@@ -13,10 +13,9 @@ import time
 from typing import Any, Callable, Awaitable, Optional
 
 from runtime.director import (
-    Director, DirectorDecision, DirectorVerdict, ArtifactManager, create_director_hook,
+    Director, DirectorDecision, DirectorVerdict, ArtifactManager,
 )
-from runtime.hook.dispatcher import HookEvent, get_hook_dispatcher
-from runtime.hook import events as hook_events
+from runtime.event_bus import EventBus, EventType, Event, get_event_bus
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +50,13 @@ class WorkflowEngine:
         artifact_manager: ArtifactManager | None = None,
         conversation_bus=None,
         story_memory=None,
-        hook_dispatcher=None,
+        event_bus=None,
     ):
         self.director = director
         self.artifact_manager = artifact_manager or (director.artifact_manager if director else ArtifactManager())
         self.conversation_bus = conversation_bus
         self.story_memory = story_memory
-        self.hooks = hook_dispatcher or get_hook_dispatcher()
+        self.event_bus = event_bus or get_event_bus()
         self._registered_agents: dict[str, LegacyAgentFunc] = {}
         self._rollback_count = 0
         self._insert_step_registry: dict[str, Callable] = {}
@@ -211,17 +210,18 @@ class WorkflowEngine:
                 if a2a_summary:
                     state["_a2a_history"] = a2a_summary
 
-            # Emit BEFORE_AGENT hook
-            await self.hooks.emit(HookEvent(
-                name=hook_events.BEFORE_AGENT,
-                payload={"agent_id": agent_id, "story_id": story_id, "step": agent_id},
-                trace_id=trace_id, session_id="",
-                conversation_id=conversation_id, agent_id=agent_id,
+            # Emit STEP_STARTED event
+            await self.event_bus.publish(Event(
+                type=EventType.STEP_STARTED,
+                data={"agent_id": agent_id, "story_id": story_id, "step": agent_id, "trace_id": trace_id, "conversation_id": conversation_id},
+                session_id="",
+                source=agent_id,
             ))
 
             step_error = None
             step_output = None
             validation_result = None
+            verdict = None  # Ensure always defined for post-loop check
 
             for attempt in range(3):  # max 3 attempts (1 initial + 2 retries)
                 retry = False
@@ -236,23 +236,24 @@ class WorkflowEngine:
 
                     latency = (time.time() - start_time) * 1000
 
-                    # Emit AFTER_AGENT hook (sync so quality gate + director run)
-                    after_event = HookEvent(
-                        name=hook_events.AFTER_AGENT,
-                        payload={
+                    # Emit STEP_COMPLETED event
+                    after_event = Event(
+                        type=EventType.STEP_COMPLETED,
+                        data={
                         "agent_id": agent_id, "success": True,
                         "adapter": False,
                         "output": step_output,
                         "latency_ms": latency,
+                        "trace_id": trace_id,
+                        "conversation_id": conversation_id,
                     },
-                    trace_id=trace_id, session_id="",
-                    conversation_id=conversation_id,
-                    agent_id=agent_id,
+                    session_id="",
+                    source=agent_id,
                 )
-                    await self.hooks.emit_sync(after_event)
+                    await self.event_bus.publish(after_event)
 
-                    validation_result = after_event.payload.get("validation_result", {})
-                    validation_failed = after_event.payload.get("validation_failed", False)
+                    validation_result = after_event.data.get("validation_result", {})
+                    validation_failed = after_event.data.get("validation_failed", False)
 
                     # Phase 1: Director analysis
                     verdict = await self.director.analyze_step(
@@ -274,14 +275,15 @@ class WorkflowEngine:
                             "[Director] RETRY %s (attempt %d): %s",
                             agent_id, attempt + 1, verdict.reasoning[:100],
                         )
-                        await self.hooks.emit(HookEvent(
-                            name=hook_events.ON_RETRY,
-                            payload={
+                        await self.event_bus.publish(Event(
+                            type=EventType.STEP_RETRY,
+                            data={
                                 "agent_id": agent_id, "attempt": attempt + 1,
                                 "max_retries": self.director.max_retries_per_step,
                                 "reasoning": verdict.reasoning,
+                                "trace_id": trace_id,
                             },
-                            trace_id=trace_id, agent_id=agent_id,
+                            source=agent_id,
                         ))
                         retry = True
                         continue
@@ -293,14 +295,15 @@ class WorkflowEngine:
                         )
                         if verdict.modified_prompt:
                             state["_retry_hint"] = verdict.modified_prompt
-                        await self.hooks.emit(HookEvent(
-                            name=hook_events.ON_RETRY,
-                            payload={
+                        await self.event_bus.publish(Event(
+                            type=EventType.STEP_RETRY,
+                            data={
                                 "agent_id": agent_id, "attempt": attempt + 1,
                                 "reasoning": "REWRITE_PROMPT",
                                 "modified_prompt": verdict.modified_prompt[:200],
+                                "trace_id": trace_id,
                             },
-                            trace_id=trace_id, agent_id=agent_id,
+                            source=agent_id,
                         ))
                         retry = True
                         continue
@@ -318,13 +321,14 @@ class WorkflowEngine:
                             "[Director] ROLLBACK from %s to %s (attempt %d): %s",
                             agent_id, target, self._rollback_count + 1, verdict.reasoning[:100],
                         )
-                        await self.hooks.emit(HookEvent(
-                            name="DIRECTOR_ROLLBACK",
-                            payload={
+                        await self.event_bus.publish(Event(
+                            type=EventType.DIRECTOR_DECISION,
+                            data={
                                 "from": agent_id, "target": target,
                                 "reasoning": verdict.reasoning,
+                                "trace_id": trace_id,
                             },
-                            trace_id=trace_id, agent_id=agent_id,
+                            source=agent_id,
                         ))
                         self._rollback_count += 1
 
@@ -368,14 +372,15 @@ class WorkflowEngine:
                                 insert_result = await insert_func(state, verdict)
                                 if isinstance(insert_result, dict):
                                     state.update(insert_result)
-                                await self.hooks.emit(HookEvent(
-                                    name="DIRECTOR_INSERT_STEP",
-                                    payload={
+                                await self.event_bus.publish(Event(
+                                    type=EventType.DIRECTOR_DECISION,
+                                    data={
                                         "agent_id": agent_id,
                                         "insert_type": insert_type,
                                         "insert_result": insert_result,
+                                        "trace_id": trace_id,
                                     },
-                                    trace_id=trace_id, agent_id=agent_id,
+                                    source=agent_id,
                                 ))
                             except Exception as insert_err:
                                 logger.error(
@@ -396,10 +401,10 @@ class WorkflowEngine:
                     step_error = f"{type(e).__name__}: {str(e)}"
                     logger.error("[WorkflowEngine] Agent %s failed: %s", agent_id, step_error[:200])
 
-                    await self.hooks.emit(HookEvent(
-                        name=hook_events.ON_ERROR,
-                        payload={"agent_id": agent_id, "error": step_error},
-                        trace_id=trace_id, agent_id=agent_id,
+                    await self.event_bus.publish(Event(
+                        type=EventType.STEP_FAILED,
+                        data={"agent_id": agent_id, "error": step_error, "trace_id": trace_id},
+                        source=agent_id,
                     ))
 
                     # Let Director analyze the error
@@ -412,7 +417,16 @@ class WorkflowEngine:
                         logger.warning("[Director] Skipping failed %s", agent_id)
                         skip = True
                         break
-                    # Default: let the outer loop handle it
+                    # If Director says PROCEED or any other decision on error,
+                    # we can't continue without output — skip to avoid infinite loop
+                    if attempt >= 1:  # Already retried once
+                        logger.warning(
+                            "[Director] Step %s still failing after error analysis, skipping",
+                            agent_id,
+                        )
+                        skip = True
+                        break
+                    # First attempt: let the retry loop try again
 
             # After step completion (or skip)
             if skip:
@@ -447,8 +461,9 @@ class WorkflowEngine:
                     "message": f"{agent_id} completed (WorkflowEngine v1.5)",
                 })
 
-            # Only advance if we didn't rollback
-            if not retry and not skip and verdict.decision != DirectorDecision.ROLLBACK:
+            # Advance pipeline if we didn't rollback
+            # (skip still advances — the step is intentionally skipped)
+            if not retry and (verdict is None or verdict.decision != DirectorDecision.ROLLBACK):
                 # Phase 3: Store step output to StoryMemory after successful step
                 if self.story_memory and step_output and not skip:
                     await self._store_to_story_memory(

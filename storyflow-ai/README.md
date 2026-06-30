@@ -4,11 +4,11 @@
 
 **基于 Multi-Agent Workflow 的 AI 漫剧自动生成平台**
 
-用户输入一段创意，系统通过 6 个 AI Agent 串联协作，自动完成
-**剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 配音合成 → 视频导出**，
+用户输入一段创意，系统通过 7 个 AI Agent 串联协作，自动完成
+**剧本生成 → 角色设计 → 分镜编排 → 图片生成 → 图生视频 → 配音合成 → 视频导出**，
 最终输出可播放的 MP4 漫剧视频。
 
-[系统架构](#系统架构) · [快速开始](#快速开始) · [API 文档](#api-接口) · [配置说明](#配置项)
+[系统架构](#系统架构) · [快速开始](#api-接口) · [API 文档](#api-接口) · [配置说明](#配置项)
 
 </div>
 
@@ -29,68 +29,54 @@
 │              (CORS · 路由 · 静态文件 · WebSocket)            │
 └─────────────────────────┬───────────────────────────────────┘
                           │
-          ┌───────────────┴───────────────┐
-          ▼                               ▼
-┌─────────────────────┐       ┌──────────────────────┐
-│  LangGraph Pipeline  │       │  Agent OS Runtime    │
-│     (v1.0 默认)      │       │    (v2.0 可选)       │
-│                      │       │                      │
-│  Script Agent        │       │  Hook · Memory       │
-│    ↓                 │       │  Skill · Session     │
-│  Character Agent     │       │  A2A · Scheduler     │
-│    ↓                 │       │  Langfuse 可观测性   │
-│  Storyboard Agent    │       └──────────────────────┘
-│    ↓                 │
-│  Image Agent         │       ┌──────────────────────┐
-│    ↓                 │       │  LangGraph           │
-│  Voice Agent         │       │  Checkpointing       │
-│    ↓                 │       │  (SQLite 崩溃恢复)    │
-│  Video Agent         │       └──────────────────────┘
-└─────────┬───────────┘
-          │
-┌─────────▼───────────────────────────────────────────────────┐
-│                      Tool Layer                             │
+┌─────────────────────────▼───────────────────────────────────┐
+│                 V1.5 Runtime (V5.0)                         │
+│                                                             │
+│  ┌────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │  Director   │  │WorkflowEngine │  │ AgentConversation │  │
+│  │ (决策大脑)  │  │  (管线编排)   │  │    Bus (A2A)      │  │
+│  └─────┬──────┘  └──────┬───────┘  └────────┬───────────┘  │
+│        │                │                    │              │
+│  ┌─────▼────────────────▼────────────────────▼───────────┐  │
+│  │              StoryMemory (统一记忆)                    │  │
+│  │  7 维: Scene/Visual/Style/World/Character/Timeline    │  │
+│  │  4 层: Working / Session / Conversation / Long-term   │  │
+│  └──────────────────────┬───────────────────────────────┘  │
+│                         │                                  │
+│  ┌──────────┐  ┌───────▼───────┐  ┌──────────────────┐    │
+│  │Reflection │  │ PromptRuntime │  │  MemoryGraph     │    │
+│  │ Runtime   │  │ (动态 Prompt) │  │(时间线角色状态)  │    │
+│  └──────────┘  └───────────────┘  └──────────────────┘    │
+│                                                             │
+│  ModelRouter · QualityEngine · RetryEngine · TraceRuntime  │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│              Agent Pipeline (7 Agents)                      │
+│  Script → Character → Storyboard → Image → I2V → Voice     │
+│                                                        → Video│
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│                      Adapter Layer                          │
 │  ┌──────────┐  ┌───────────┐  ┌───────────┐  ┌──────────┐ │
-│  │ ChatOpenAI│  │  ComfyUI  │  │ CosyVoice │  │  FFmpeg  │ │
-│  │ (LLM)    │  │ (SDXL)    │  │  (TTS)    │  │ (Video)  │ │
+│  │   LLM    │  │  Image    │  │  Voice    │  │   I2V    │ │
+│  │(OpenAI兼容)│ │(DashScope)│  │(DashScope)│  │(Kling)  │ │
 │  └──────────┘  └───────────┘  └───────────┘  └──────────┘ │
 │  ┌──────────┐  ┌───────────┐                               │
-│  │  Qdrant  │  │  Redis    │  (PubSub 推送 + 任务状态)     │
-│  │ (Memory) │  │           │                               │
+│  │  Video   │  │ Mock 降级  │  ComfyUI (SDXL) 可选回退     │
+│  │ (FFmpeg) │  │           │                               │
 │  └──────────┘  └───────────┘                               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 双后端引擎
+### V1.5 Runtime 三阶段升级 ✅ 已完成
 
-| | LangGraph Pipeline (v1.0) | Agent OS Runtime (v2.0) |
-|--|--|--|
-| **触发方式** | 默认 | `USE_RUNTIME=true` |
-| **编排** | `StateGraph` + `StoryState` | `RuntimeWorkflowRunner` + `ConversationManager` |
-| **可观测性** | 日志 + DB 持久化 | Hook 事件链 (Logger → QualityGate → Langfuse) |
-| **质量门禁** | 无 | QualityGate Hook (6 Agent 专用校验器，不合格自动重试) |
-| **人物一致性** | 无 | CharacterMemoryService (Memory 存储角色外观，分镜/出图时注入) |
-| **记忆** | 无 | 4 层 Memory (working / session / conversation / long-term) |
-| **通信** | 状态字典传递 | MCP Envelope + A2A Message Bus (memory / Redis Stream) |
-| **技能** | 硬编码 | Skill Engine (6 个 YAML Skill 定义 + 约束校验) |
-| **会话** | 无 | Session Manager (状态管理 + 超时) |
-| **追踪** | 无 | Langfuse Handler (配置即启用) |
-| **调度** | LangGraph executor | Execution Scheduler (LLM / Tool / GPU 线程池) |
-| **增量持久化** | astream_events 逐步 | persist_callback 每步 DB 写入 |
+V1.5 Runtime 已完成全部三阶段升级，所有架构变更均为 Runtime 层面，**未新增任何业务 Agent**，原有 7 个 Agent 保持不变。
 
-默认使用 LangGraph 管线，可通过环境变量 `USE_RUNTIME=true` 切换到 Agent OS Runtime。Runtime v2.0 通过适配器包装现有 Agent，无需重写代码即可获得三大增强能力：
+#### Phase 1: Director Brain — LLM 驱动的管线决策 ✅
 
-- **Hook 质量门禁** — 每个 Agent 完成后自动运行专用校验器（script 检查结构完整性、character 检查四维度外观、storyboard 检查场景数量和角色引用、image/voice/video 检查产出物），校验失败自动重试最多 2 次
-- **Memory 人物一致性** — character_agent 产出后自动将角色外观存入 Memory，storyboard_agent 生成分镜时自动注入一致性约束段落（"角色外观一致性约束（必须严格遵守）"），image_agent 可验证 prompt 是否包含完整角色特征
-- **Skill 驱动** — 6 个 Agent 各有 YAML Skill 定义（含 I/O Schema、约束规则、custom_rules），Runtime 启动时自动从 `skills/` 目录加载
-
-Runtime 初始化失败时自动 fallback 回 LangGraph。
-
-### V1.5 Runtime 三阶段升级
-
-#### Phase 1: Director Brain — LLM 驱动的管线决策
-
-Director 读取 **全部管线产出物** (ArtifactManager)，通过 LLM 分析做出 5 种决策：
+Director 重写为真正的"决策大脑"，读取 **全部管线产出物** (ArtifactManager)，通过 LLM 分析做出 5 种智能决策：
 
 | 决策 | 动作 |
 |------|------|
@@ -98,11 +84,13 @@ Director 读取 **全部管线产出物** (ArtifactManager)，通过 LLM 分析�
 | `RETRY` | 重试当前步骤（含重试上下文） |
 | `ROLLBACK` | 移除产出物 + 重置管线索引 |
 | `REWRITE_PROMPT` | 用 LLM 重写当前步骤 prompt 后重试 |
-| `INSERT_STEP` | 插入自定义修复函数（如角色修复） |
+| `SKIP` | 跳过当前步骤 |
 
-Director prompt 包含：管线位置、重试上下文、历史决策、完整产出物摘要。ArtifactManager 跟踪所有管线输出并支持 rollback。
+Director prompt 包含：管线位置、全部产出物摘要、重试上下文、历史决策记录。无 LLM 时自动降级为规则引擎。ArtifactManager 跟踪所有管线输出并支持 rollback。
 
-#### Phase 2: A2A 富上下文传递
+Bug 修复：WorkflowEngine 正确处理 SKIP（推进管线索引，避免死循环）；持久性失败在 2 次重试后自动跳过。
+
+#### Phase 2: A2A 富上下文传递 ✅
 
 AgentConversationBus 升级为结构化富上下文（非纯文本摘要），A2A 消息携带：
 
@@ -110,12 +98,14 @@ AgentConversationBus 升级为结构化富上下文（非纯文本摘要），A2
 - 场景数据 + 角色-场景映射
 - 生成统计（Generation Stats）
 - 产出物引用（Artifact References）
-- 约束：模板约束 + 动态约束（按转换 / 按状态）
+- 约束：模板约束（按转换类型）+ 动态约束（按状态，如角色一致性、集数检查）
 - 反馈：质量门禁错误、警告和修复建议
 
-#### Phase 3: StoryMemory 统一记忆系统
+WorkflowEngine 在每个步骤执行前自动将 A2A 消息注入 Agent 状态。
 
-四维记忆架构，全部异步 API：
+#### Phase 3: StoryMemory 统一记忆系统 ✅
+
+全新 7 维记忆架构（Scene/Visual/Style/World + Character/Timeline），全部异步 API：
 
 | 维度 | 内容 |
 |------|------|
@@ -123,22 +113,24 @@ AgentConversationBus 升级为结构化富上下文（非纯文本摘要），A2
 | Visual Memory | 角色外观、场景视觉描述 |
 | Style Memory | 叙事风格、镜头语言、节奏 |
 | World Memory | 世界观设定、规则、背景知识 |
+| Character Memory | 角色档案、性格、关系 |
+| Timeline Memory | 剧情时间线、事件顺序 |
+| Meta Memory | 生成统计、质量评分 |
 
-集成于 WorkflowEngine：每步执行前自动注入记忆上下文，执行后自动存储步骤产出物。标签匹配即满足检索条件，无需额外文本关键词匹配。
-
-**测试覆盖：** 30 个集成测试覆盖全部三阶段功能，全部通过。RuntimeApp 自动组装 Director + ArtifactManager + ConversationBus + StoryMemory。`memory/__init__.py` 统一导出 `StoryMemory`。
+4 层记忆层级（Working / Session / Conversation / Long-term）支持 TTL 自动过期。MemoryGraph 提供时间线感知的角色状态追踪。WorkflowEngine 每步执行前自动查询并注入记忆上下文，执行后自动存储产出物。
 
 ### 核心设计
 
-- **实时进度推送** — Redis PubSub + WebSocket，前端 6 步进度条实时更新
-- **数据库持久化** — 每个 Agent 完成后立即写入 PostgreSQL（5 个 `_persist_*` 函数），两个引擎均支持增量持久化
-- **崩溃恢复** — LangGraph `AsyncSqliteSaver` Checkpoint，进程重启后从断点续跑
-- **容错与降级** — 图片/配音/视频 Agent 按场景粒度 try/catch，部分失败不中断整体流程
-- **自动重试** — Script/Character/Storyboard Agent 使用 tenacity 3 次指数退避重试；Image Agent 每张图最多 2 次重试；Runtime 模式额外提供 Quality Gate 质量门禁重试（最多 2 次）
+- **Director 5-决策循环** — 每步执行后 Director 分析全部产出物，做出 PROCEED/RETRY/ROLLBACK/REWRITE_PROMPT/SKIP 决策，实现根因驱动的智能管线控制
+- **A2A 结构化消息** — Agent 间通过携带角色档案、场景数据、约束模板、质量反馈的结构化消息通信，而非纯文本摘要
+- **实时进度推送** — Redis PubSub + WebSocket，前端 7 步进度条实时更新
+- **数据库持久化** — 每个 Agent 完成后立即写入 PostgreSQL，WorkflowEngine 支持增量持久化
+- **容错与降级** — 图片/配音/视频 Agent 按场景粒度 try/catch，部分失败不中断整体流程；Adapter 层 Mock 降级
+- **自动重试** — Script/Character/Storyboard Agent 使用 tenacity 3 次指数退避重试；Image Agent 每张图最多 2 次重试；Director 持久性失败 2 次后 SKIP
 - **LLM 工厂模式** — `get_creative_llm()` (temp=0.8) / `get_precise_llm()` (temp=0.4) 按场景选用，实例缓存复用
 - **结构化输出** — Script/Character Agent 用 `PydanticOutputParser`；Storyboard Agent 双策略（Pydantic 优先 + JSON fallback）
-- **Prompt 外部化** — 所有 Agent Prompt 集中在 `prompts/` 模块，与 Agent 逻辑解耦
-- **Runtime 三大能力** — Hook（质量门禁）、Memory（人物一致性）、Skill（约束驱动）三大系统已完整接通管线
+- **Prompt 外部化** — 所有 Agent Prompt 集中在 `prompts/` 模块，与 Agent 逻辑解耦；PromptRuntime 动态组装记忆+反思+指令
+- **零本地 GPU** — 全部使用云端 API（LLM/Image/Voice/I2V），ComfyUI 仅作可选本地回退
 
 ## 技术栈
 
@@ -146,13 +138,14 @@ AgentConversationBus 升级为结构化富上下文（非纯文本摘要），A2
 |------|------|------|
 | **前端** | React 18, TypeScript, Vite 5, Ant Design 5, Axios | SPA，3 页面 |
 | **后端** | Python 3.11+, FastAPI, SQLAlchemy 2.0 (async), Pydantic 2.0 | 异步全栈 |
-| **Agent 框架** | LangGraph, LangChain, ChatOpenAI | 6-Agent 串行管线 |
-| **Runtime (v2)** | Agent OS Runtime | Hook / Memory / Skill / Session / A2A / Langfuse |
+| **Agent 框架** | LangChain, ChatOpenAI | 7-Agent 串行管线 |
+| **Runtime** | Agent OS Runtime V5.0 | Director / A2A / StoryMemory / Reflection / PromptRuntime / MemoryGraph / ModelRouter |
 | **数据库** | PostgreSQL 16 (asyncpg) | 故事 / 角色 / 场景 / 任务 |
-| **缓存** | Redis 7 | 任务状态 + PubSub + A2A 传输 |
-| **向量数据库** | Qdrant | 角色 / 剧情记忆检索 |
-| **图像生成** | Stable Diffusion XL via ComfyUI API | 1024x1024, KSampler DPM++ 2M Karras |
-| **语音合成** | CosyVoice TTS | 男/女声自动映射 |
+| **缓存** | Redis 7 | 任务状态 + PubSub |
+| **向量数据库** | Qdrant | 角色记忆检索 |
+| **图像生成** | DashScope (通义万相) / DALL-E 3 | ComfyUI (SDXL) 可选回退 |
+| **语音合成** | DashScope TTS (CosyVoice) | 男/女声自动映射 |
+| **图生视频** | Kling / Runway | 3-5 秒动态视频 |
 | **视频合成** | FFmpeg | 图片+音频→视频→字幕烧录→拼接 |
 | **部署** | Docker Compose, Nginx | 一键部署 |
 
@@ -162,6 +155,7 @@ AgentConversationBus 升级为结构化富上下文（非纯文本摘要），A2
 storyflow-ai/
 ├── backend/
 │   ├── main.py                        # FastAPI 入口 (Runtime 初始化 + CORS + 路由)
+│   ├── core.py                        # V5.0 核心组装 (Director + WorkflowEngine + StoryMemory)
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   │
@@ -195,26 +189,29 @@ storyflow-ai/
 │   │   ├── story_repo.py
 │   │   └── task_repo.py
 │   │
-│   ├── agents/                        # ⭐ 6 个 LangGraph Agent
+│   ├── agents/                        # ⭐ 7 个 AI Agent
 │   │   ├── script_agent.py            # 剧本 (tenacity 3x, PydanticOutputParser)
 │   │   ├── character_agent.py         # 角色视觉卡片 (AppearanceCard 强类型)
 │   │   ├── storyboard_agent.py        # 分镜 (双策略: Pydantic + JSON fallback)
-│   │   ├── image_agent.py             # ComfyUI (随机 seed, 逐场景重试, 部分容错)
-│   │   ├── voice_agent.py             # CosyVoice (性别→音色, 部分容错)
+│   │   ├── image_agent.py             # 图片生成 (逐场景重试, 部分容错)
+│   │   ├── image_to_video_agent.py    # 图生视频 (Kling/Runway)
+│   │   ├── voice_agent.py             # 语音合成 (性别→音色, 部分容错)
 │   │   └── video_agent.py             # FFmpeg (实际时长对齐字幕, 烧录, 拼接)
 │   │
 │   ├── workflows/
 │   │   ├── state.py                   # StoryState TypedDict
-│   │   ├── story_workflow.py          # LangGraph 编排 + Checkpoint
-│   │   └── runtime_workflow.py        # Agent OS Runtime 适配层
+│   │   ├── story_workflow.py          # LangGraph 编排
+│   │   └── runtime_workflow.py        # V1.5 Runtime 适配层
 │   │
 │   ├── tools/
-│   │   ├── comfyui_client.py
-│   │   ├── cosyvoice_client.py
+│   │   ├── comfyui_client.py          # ComfyUI (可选本地回退)
+│   │   ├── cosyvoice_client.py        # CosyVoice TTS
 │   │   └── ffmpeg_tool.py
 │   │
+│   ├── adapters/                      # ⭐ 5 类 Adapter (LLM/Image/I2V/Voice/Video)
+│   │
 │   ├── tasks/
-│   │   └── runner.py                  # 双后端任务运行器 (5 个 _persist_* 函数)
+│   │   └── runner.py                  # 任务运行器 (持久化)
 │   │
 │   ├── app/
 │   │   ├── database.py
@@ -222,32 +219,30 @@ storyflow-ai/
 │   │   └── llm.py                     # LLM 工厂 (creative / precise)
 │   │
 │   ├── memory/
-│   │   └── vector_store.py            # Qdrant 向量记忆
+│   │   ├── vector_store.py            # Qdrant 向量记忆
+│   │   ├── models.py                  # MemoryEntry / MemoryQuery / MemoryType
+│   │   └── manager.py                 # MemoryManager (4 层 + TTL)
 │   │
 │   ├── utils/
 │   │   └── json_helper.py
 │   │
-│   ├── skills/                        # ⭐ Skill 定义 (YAML)
-│   │   ├── script_writer/skill.yaml   #   编剧 Skill (max 6 episodes)
-│   │   ├── character_designer/        #   角色设计 Skill (4维度必须)
-│   │   ├── storyboard_designer/       #   分镜 Skill (角色一致性约束)
-│   │   ├── image_generator/           #   出图 Skill (DPM++ 2M Karras)
-│   │   ├── voice_generator/           #   配音 Skill (性别→音色)
-│   │   └── video_composer/            #   合成 Skill (ASS字幕+拼接)
+│   ├── skills/                        # Skill 定义
 │   │
-│   └── runtime/                       # ⭐ Agent OS Runtime (v2.0)
-│       ├── app.py                     # RuntimeApp (Hook+Skill+Memory 组装)
-│       ├── adapter.py                 # 适配器 (Memory注入+质量重试+Skill约束)
-│       ├── agent_runtime/             # Agent 运行时上下文
-│       ├── execution/                 # 调度器 (LLM/Tool/GPU 线程池)
-│       ├── conversation/              # 对话管理 (线性管线编排)
-│       ├── skill_engine/              # 技能注册/选择/校验/执行
-│       ├── memory/                    # 4 层记忆 + CharacterMemoryService
-│       ├── session/                   # 会话管理 (超时/恢复)
-│       ├── hook/                      # 事件钩子 (14 种生命周期事件)
-│       ├── handlers/                  # Logger / QualityGate / Langfuse
-│       ├── mcp/                       # MCP 协议 (Envelope/Router/Validator)
-│       └── message_bus/               # A2A 通信 (InMemory/Redis Stream)
+│   └── runtime/                       # ⭐ V1.5 Runtime (V5.0)
+│       ├── core.py                    # Director + WorkflowEngine + StoryMemory 组装
+│       ├── director.py                # Director (LLM 5-决策大脑 + 规则降级)
+│       ├── workflow_engine.py         # WorkflowEngine (Director 集成 + A2A + 记忆)
+│       ├── agent_conversation.py      # AgentConversationBus (A2A 富上下文)
+│       ├── prompt_runtime.py          # PromptRuntime (动态 Prompt 构建)
+│       ├── reflection_runtime.py      # ReflectionRuntime (good/bad/suggestion)
+│       ├── quality_engine.py          # QualityEngine (6 个 Checker)
+│       ├── retry_engine.py            # RetryEngine (策略化重试)
+│       ├── trace_runtime.py           # TraceRuntime (全链路追踪)
+│       ├── model_router.py            # ModelRouter (智能模型选择)
+│       ├── memory/                    # StoryMemory (7 维统一记忆)
+│       │   ├── story_memory.py
+│       │   └── memory_graph.py        # MemoryGraph (时间线角色状态)
+│       └── ...                        # AdapterRegistry / EventBus / Session
 │
 ├── frontend/
 │   ├── package.json
@@ -258,7 +253,7 @@ storyflow-ai/
 │       ├── types/index.ts             # TypeScript 类型 (与后端对齐)
 │       └── pages/
 │           ├── HomePage.tsx           # 创意输入 + 历史列表
-│           ├── StoryPage.tsx          # 6 步进度 + WebSocket
+│           ├── StoryPage.tsx          # 7 步进度 + WebSocket
 │           └── ResultPage.tsx         # 视频 + 剧本 + 分镜 + 角色
 │
 ├── deploy/
@@ -279,10 +274,11 @@ storyflow-ai/
 - Node.js 18+
 - Docker & Docker Compose
 - FFmpeg
-- **外部依赖**（自行部署或使用远程服务）：
+- **外部 API**（远程服务，零本地 GPU 依赖）：
   - OpenAI 兼容 LLM API（GPT-4o / Qwen / DeepSeek 等）
-  - [ComfyUI](https://github.com/comfyanonymous/ComfyUI) (SDXL)
-  - [CosyVoice](https://github.com/FunAudioLLM/CosyVoice) (TTS)
+  - DashScope API（图片生成 + TTS）
+  - Kling / Runway API（图生视频）
+  - ComfyUI (SDXL) — 可选本地回退
 
 ### 方式一：本地开发
 
@@ -351,42 +347,52 @@ curl http://localhost:8000/api/task/{task_id}
 用户创意 (prompt + genre)
         │
         ▼
-┌──────────────────┐
-│  Script Agent    │  LLM → 剧情大纲 + 角色设定 + 分集剧本
-│  temp=0.8        │  PydanticOutputParser → ScriptOutput
-│  tenacity 3x     │
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ Character Agent  │  丰富角色视觉描述
-│  temp=0.4        │  → AppearanceCard (hair/body/cloth/face)
-│  tenacity 3x     │  失败 fallback 原始角色
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│ Storyboard Agent │  剧本 → 分镜 (逐集)
-│  temp=0.4        │  策略1: PydanticOutputParser
-│  tenacity 3x/集  │  策略2: JSON 解析 fallback
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Image Agent     │  ComfyUI 逐镜生成
-│  随机 seed/镜    │  SDXL 1024x1024
-│  2x 重试/镜      │  部分失败 → image_partial
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Voice Agent     │  CosyVoice 逐镜配音
-│  性别→音色映射   │  base64/URL 双格式
-│  部分容错        │
-└────────┬─────────┘
-         ▼
-┌──────────────────┐
-│  Video Agent     │  FFmpeg 合成
-│                  │  1. 图片+音频 → 逐场景视频 (记录实际时长)
-│                  │  2. ASS 字幕 (基于实际视频时长)
-│                  │  3. 字幕烧录 → concat 拼接 → story.mp4
-└──────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│                   Director 决策循环                         │
+│                                                           │
+│  ArtifactManager (全部产出物) ──→ Director (LLM 分析)     │
+│                                    │                      │
+│                    ┌───────────────┼───────────┐          │
+│                    ▼               ▼           ▼          │
+│                PROCEED        RETRY/ROLLBACK  REWRITE     │
+│                    │          /REWRITE_PROMPT  _PROMPT     │
+│                    │               │            │          │
+│                    ▼               ▼            ▼          │
+│  StoryMemory (注入记忆) ──→ Agent 执行 ──→ A2A 消息传递   │
+│                                    │                      │
+│                            Reflection 反思               │
+│                           (good/bad/suggestion)           │
+│                                    │                      │
+│                              QualityEngine                 │
+│                                    │                      │
+│                            Director 下一轮决策             │
+└─────────────────────────┬─────────────────────────────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Script Agent  │→│Character Agent│→│Storyboard    │
+│ temp=0.8      │  │ temp=0.4     │  │ Agent        │
+│ tenacity 3x   │  │ tenacity 3x  │  │ tenacity 3x/集│
+└──────────────┘  └──────────────┘  └──────┬───────┘
+                                          │
+                    ┌─────────────────────┼──────────────┐
+                    ▼                     ▼              ▼
+            ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+            │ Image Agent  │  │I2V Agent     │  │ Voice Agent  │
+            │ DashScope/   │  │ Kling/Runway │  │ DashScope    │
+            │ DALL-E 3     │  │ 3-5s/场景    │  │ TTS          │
+            │ 2x 重试/镜   │  │ 部分容错     │  │ 部分容错     │
+            └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+                   │                 │                 │
+                   └─────────────────┼─────────────────┘
+                                     ▼
+                           ┌──────────────────┐
+                           │  Video Agent     │
+                           │  FFmpeg 合成     │
+                           │  图片+音频+字幕  │
+                           │  → story.mp4     │
+                           └──────────────────┘
 ```
 
 ## 数据库设计
@@ -407,32 +413,23 @@ task           ─── 任务 (status, progress, current_step, error_message)
 | `LLM_MODEL` | `gpt-4o` | 模型名称 |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API 地址 |
 | `LLM_TEMPERATURE` | `0.7` | 默认温度 |
-| `COMFYUI_URL` | `http://localhost:8188` | ComfyUI |
-| `COSYVOICE_URL` | `http://localhost:50000` | CosyVoice |
+| `DASHSCOPE_API_KEY` | — | DashScope API Key（图片 + TTS） |
+| `KLING_API_KEY` | — | Kling API Key（图生视频） |
 | `DATABASE_URL` | `postgresql+asyncpg://...` | PostgreSQL |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant |
 | `STORAGE_PATH` | `./storage` | 文件存储 |
-| `USE_RUNTIME` | `false` | 设为 `true` 启用 Agent OS Runtime |
+| `COMFYUI_URL` | `http://localhost:8188` | ComfyUI（可选本地回退） |
 | `COMFYUI_POLL_TIMEOUT` | `300` | 单张图最大等待秒数 |
 | `COMFYUI_MAX_RETRIES` | `2` | 单张图重试次数 |
 | `MAX_EPISODES` | `6` | 最大集数 |
 | `SCENES_PER_EPISODE` | `(5, 10)` | 每集场景数范围 |
-
-### Runtime v2.0 额外配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `USE_RUNTIME` | `false` | 设为 `true` 启用 Agent OS Runtime v2.0 |
-| `LANGFUSE_PUBLIC_KEY` | — | Langfuse 公钥（启用可观测性） |
+| `LANGFUSE_PUBLIC_KEY` | — | Langfuse 公钥（可选，启用可观测性） |
 | `LANGFUSE_SECRET_KEY` | — | Langfuse 密钥 |
-| `A2A_TRANSPORT` | `memory` | Agent 通信 (`memory` / `redis`) |
-| `LLM_WORKER_CONCURRENCY` | `10` | LLM 并发数 |
-| `GPU_WORKER_CONCURRENCY` | `2` | GPU 并发数 |
-| `SESSION_IDLE_TIMEOUT` | `86400` | 会话超时 (秒) |
 | `MEMORY_WORKING_TTL` | `300` | 工作记忆 TTL (秒) |
 | `MEMORY_SESSION_TTL` | `86400` | 会话记忆 TTL (秒) |
-| `MEMORY_CONFIDENCE_THRESHOLD` | `0.7` | 记忆存储最低置信度 |
+
+> **注意：** V1.5 Runtime 是默认且唯一的运行时，无需设置 `USE_RUNTIME` 环境变量。旧版 LangGraph 管线已移除。
 
 ## License
 

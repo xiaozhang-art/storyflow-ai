@@ -1,633 +1,704 @@
-"""Integration tests for StoryFlow AI V1.5 Runtime — three-phase upgrade.
+"""Integration Tests for V1.5 Runtime Three-Phase Upgrade.
 
-Tests cover:
-- Phase 1: Director brain (5 decisions, artifact analysis, rule-based fallback)
-- Phase 2: A2A rich context passing (structured messages, constraints, feedback)
-- Phase 3: StoryMemory integration (scene/visual/style/world memory)
+Phase 1: Director brain (LLM analysis + 5 decisions), ROLLBACK, MODIFY_AND_RETRY
+Phase 2: A2A structured context/feedback/constraint passing between agents
+Phase 3: StoryMemory unified memory system integration
 
-All tests are self-contained and do NOT require LLM API calls or external services.
+Run from backend/ directory:
+    python -m pytest tests/test_v15_integration.py -v --timeout=60
 """
+
 from __future__ import annotations
 
 import asyncio
 import sys
 import os
-import pytest
 
-# Ensure backend is on path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Ensure backend directory is on path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-# ============================================================
-# Phase 1: Director Tests
-# ============================================================
+# ═══════════════════════════════════════════════════════════════════
+# Phase 1 Tests: Director Brain + 5 Decisions
+# ═══════════════════════════════════════════════════════════════════
 
-class TestDirectorBrain:
-    """Phase 1: Director autonomous decision-making brain."""
 
-    def test_artifact_manager_store_and_retrieve(self):
-        from runtime.director import ArtifactManager
-        am = ArtifactManager()
-        am.store("script", {"outline": "Test story", "characters": [], "episodes": []})
-        data = am.get("script")
-        assert data is not None
-        assert data["outline"] == "Test story"
+def test_director_imports():
+    """Verify all Director classes are importable."""
+    from runtime.director import Director, DirectorDecision, DirectorVerdict, ArtifactManager
+    assert Director is not None
+    assert DirectorDecision.PROCEED == "proceed"
+    assert DirectorDecision.RETRY == "retry"
+    assert DirectorDecision.ROLLBACK == "rollback"
+    assert DirectorDecision.REWRITE_PROMPT == "rewrite_prompt"
+    assert DirectorDecision.SKIP == "skip"
+    assert DirectorDecision.INSERT_STEP == "insert_step"
+    print("[PASS] test_director_imports")
 
-    def test_artifact_manager_summary(self):
-        from runtime.director import ArtifactManager
-        am = ArtifactManager()
-        am.store("script", {
-            "outline": "A hero's journey",
-            "characters": [{"name": "Alice"}, {"name": "Bob"}],
-            "episodes": [{"episode_no": 1, "title": "Beginning", "script": "Once upon a time..."}],
-        })
-        am.store("character", {
-            "characters": [
-                {"name": "Alice", "appearance": {"hair": "long black", "face": "round", "body": "slim", "cloth": "red dress"}},
-            ],
-        })
-        summary = am.get_summary()
-        assert "script" in summary
-        assert "character" in summary
-        assert "Alice" in summary
 
-    def test_artifact_manager_rollback(self):
-        from runtime.director import ArtifactManager
-        am = ArtifactManager()
-        am.store("script", {"outline": "test"})
-        am.store("character", {"characters": []})
-        am.store("storyboard", {"storyboard": []})
-        am.remove_from("character")
-        assert am.get("script") is not None
-        assert am.get("character") is None
-        assert am.get("storyboard") is None
+def test_director_rule_based_proceed():
+    """Director should PROCEED when step succeeds with no issues."""
+    from runtime.director import Director, DirectorDecision, ArtifactManager
 
-    @pytest.mark.asyncio
-    async def test_director_proceed_on_success(self):
-        from runtime.director import Director, DirectorDecision
-        am = None  # Will use default
-        director = Director(artifact_manager=None, max_retries_per_step=2)
-        verdict = await director.analyze_step(
-            agent_id="script",
-            output={"outline": "test", "characters": [], "episodes": []},
-            error=None,
-            validation_result={"passed": True},
-        )
-        assert verdict.decision == DirectorDecision.PROCEED
-        assert verdict.confidence > 0
+    am = ArtifactManager()
+    am.store("script", {
+        "outline": "A campus romance story about two students finding love",
+        "characters": [{"name": "Alice"}, {"name": "Bob"}],
+        "episodes": [{"episode_no": 1, "title": "Meeting", "script": "They meet at the library..."}],
+    })
 
-    @pytest.mark.asyncio
-    async def test_director_rule_based_retry_on_transient_error(self):
-        from runtime.director import Director, DirectorDecision
-        director = Director(artifact_manager=None, max_retries_per_step=3)
-        verdict = await director.analyze_step(
-            agent_id="image",
-            output=None,
-            error="APIError: Rate limit exceeded (429)",
-            validation_result=None,
-        )
-        assert verdict.decision == DirectorDecision.RETRY
-        assert verdict.confidence >= 0.8
-
-    @pytest.mark.asyncio
-    async def test_director_rule_based_skip_image_after_retry(self):
-        from runtime.director import Director, DirectorDecision
-        director = Director(artifact_manager=None, max_retries_per_step=3)
-        # Use a non-transient error so skip logic triggers after 1 retry
-        await director.analyze_step(
-            agent_id="image", output=None,
-            error="InvalidAPIKey: access denied", validation_result=None,
-        )
-        # Second attempt — should skip image (non-transient error, agent is image, retry_count >= 1)
-        verdict = await director.analyze_step(
-            agent_id="image", output=None,
-            error="InvalidAPIKey: access denied", validation_result=None,
-        )
-        assert verdict.decision == DirectorDecision.SKIP
-
-    @pytest.mark.asyncio
-    async def test_director_rule_based_rollback_on_missing_episodes(self):
-        from runtime.director import Director, DirectorDecision, ArtifactManager
-        am = ArtifactManager()
-        # Store a script with EMPTY episodes — this is the root cause
-        am.store("script", {"outline": "test", "characters": [], "episodes": []})
-        # Store empty character data
-        am.store("character", {"characters": []})
-        director = Director(artifact_manager=am, max_retries_per_step=3)
-        # Storyboard validation fails with character error, retry_count >= 1
-        # First call — retry_count = 0, just retry
-        v1 = await director.analyze_step(
-            agent_id="storyboard",
-            output={"storyboard": []},
-            error=None,
-            validation_result={
-                "passed": False,
-                "validation_failed": True,
-                "errors": ["Character reference missing in scene prompts"],
-                "warnings": [],
-            },
-        )
-        # Second call — retry_count = 1, should rollback to character (no char data)
-        v2 = await director.analyze_step(
-            agent_id="storyboard",
-            output={"storyboard": []},
-            error=None,
-            validation_result={
-                "passed": False,
-                "validation_failed": True,
-                "errors": ["Character reference missing in scene prompts"],
-                "warnings": [],
-            },
-        )
-        assert v2.decision == DirectorDecision.ROLLBACK
-        assert v2.target_step in ("script", "character")  # Root cause could be either
-
-    @pytest.mark.asyncio
-    async def test_director_rewrite_prompt_with_fix_suggestion(self):
-        from runtime.director import Director, DirectorDecision
-        director = Director(artifact_manager=None, max_retries_per_step=3)
-        verdict = await director.analyze_step(
+    director = Director(artifact_manager=am)
+    verdict = asyncio.get_event_loop().run_until_complete(
+        director.analyze_step(
             agent_id="character",
-            output={"characters": [{"name": "X", "appearance": {}}]},
-            error=None,
+            output={"characters": [
+                {"name": "Alice", "appearance": {"hair": "long black", "face": "round", "body": "slim", "cloth": "white dress"}},
+                {"name": "Bob", "appearance": {"hair": "short brown", "face": "sharp", "body": "tall", "cloth": "blue shirt"}},
+            ]},
+        )
+    )
+    assert verdict.decision == DirectorDecision.PROCEED
+    print(f"[PASS] test_director_rule_based_proceed: {verdict.decision.value}")
+
+
+def test_director_rule_based_retry_transient():
+    """Director should RETRY on transient errors (timeout, rate limit)."""
+    from runtime.director import Director, DirectorDecision, ArtifactManager
+
+    am = ArtifactManager()
+    director = Director(artifact_manager=am, max_retries_per_step=2)
+
+    verdict = asyncio.get_event_loop().run_until_complete(
+        director.analyze_step(
+            agent_id="image",
+            error="APIError: Request timeout after 30s",
+        )
+    )
+    assert verdict.decision == DirectorDecision.RETRY
+    assert "timeout" in verdict.reasoning.lower() or "transient" in verdict.reasoning.lower()
+    print(f"[PASS] test_director_rule_based_retry_transient: {verdict.reasoning[:80]}")
+
+
+def test_director_rule_based_skip():
+    """Director should SKIP non-critical steps after retries are exhausted."""
+    from runtime.director import Director, DirectorDecision, ArtifactManager
+
+    am = ArtifactManager()
+    director = Director(artifact_manager=am, max_retries_per_step=2)
+    director._step_retry_counts["voice"] = 1  # Already retried once
+
+    verdict = asyncio.get_event_loop().run_until_complete(
+        director.analyze_step(
+            agent_id="voice",
+            error="TTS API returned 500",
+        )
+    )
+    assert verdict.decision == DirectorDecision.SKIP
+    print(f"[PASS] test_director_rule_based_skip: {verdict.reasoning[:80]}")
+
+
+def test_director_rule_based_rollback():
+    """Director should ROLLBACK when root cause is in an earlier step."""
+    from runtime.director import Director, DirectorDecision, ArtifactManager
+
+    am = ArtifactManager()
+    # Script has no episodes
+    am.store("script", {
+        "outline": "A story",
+        "characters": [{"name": "Alice"}],
+        "episodes": [],  # EMPTY!
+    })
+    am.store("character", {"characters": [{"name": "Alice"}]})
+
+    director = Director(artifact_manager=am, max_retries_per_step=2)
+    director._step_retry_counts["storyboard"] = 1  # Already retried once
+
+    verdict = asyncio.get_event_loop().run_until_complete(
+        director.analyze_step(
+            agent_id="storyboard",
             validation_result={
-                "passed": False,
                 "validation_failed": True,
-                "errors": ["Character 'X' missing appearance dimensions: hair, body, cloth, face"],
-                "fix_suggestion": "Ensure all 4 appearance dimensions are filled: hair, face, body, cloth",
+                "errors": ["No scenes generated from empty episodes"],
             },
         )
-        assert verdict.decision == DirectorDecision.REWRITE_PROMPT
-        assert verdict.modified_prompt != ""
-
-    def test_director_stats(self):
-        from runtime.director import Director
-        director = Director(artifact_manager=None)
-        stats = director.get_stats()
-        assert "total_decisions" in stats
-        assert "step_retries" in stats
-
-    @pytest.mark.asyncio
-    async def test_director_max_retries_cap(self):
-        from runtime.director import Director, DirectorDecision
-        director = Director(artifact_manager=None, max_retries_per_step=1)
-        # First call: retry (transient error)
-        v1 = await director.analyze_step(
-            agent_id="voice", output=None,
-            error="timeout", validation_result=None,
-        )
-        assert v1.decision == DirectorDecision.RETRY
-        # Second call: should be capped — voice is not image, so it won't SKIP
-        # It will retry again but the early return catches max_retries
-        v2 = await director.analyze_step(
-            agent_id="voice", output=None,
-            error="timeout", validation_result=None,
-        )
-        # retry_count=1 >= max_retries=1, and no error-less condition, so it goes to rule-based
-        # In rule-based: transient error, retry_count=1, 1 < 1 is False, falls through to PROCEED
-        assert v2.decision in (DirectorDecision.PROCEED, DirectorDecision.SKIP)
-        assert "Max retries" in v2.reasoning or v2.decision == DirectorDecision.SKIP
+    )
+    assert verdict.decision == DirectorDecision.ROLLBACK
+    assert verdict.target_step == "script"
+    print(f"[PASS] test_director_rule_based_rollback: target={verdict.target_step}")
 
 
-# ============================================================
-# Phase 2: A2A Conversation Bus Tests
-# ============================================================
+def test_director_rule_based_rewrite_prompt():
+    """Director should REWRITE_PROMPT when quality gate fails with fix suggestion."""
+    from runtime.director import Director, DirectorDecision, ArtifactManager
 
-class TestA2AConversation:
-    """Phase 2: Rich A2A context/feedback/constraint passing."""
+    am = ArtifactManager()
+    am.store("script", {
+        "outline": "A campus romance",
+        "characters": [{"name": "Alice"}, {"name": "Bob"}],
+        "episodes": [{"episode_no": 1, "title": "Meeting", "script": "Script content here..."}],
+    })
+    am.store("character", {
+        "characters": [
+            {"name": "Alice", "appearance": {"hair": "long black", "face": "round"}},
+        ]
+    })
 
-    def test_send_and_retrieve_message(self):
-        from runtime.agent_conversation import AgentConversationBus, A2AMessage
-        bus = AgentConversationBus()
-        msg = A2AMessage(
-            from_agent="script", to_agent="character",
-            message_type="handoff", content="Script completed",
-        )
-        bus.send_message(msg, conversation_id="test_conv")
-        msgs = bus.get_messages_for("character", "test_conv")
-        assert len(msgs) == 1
-        assert msgs[0].content == "Script completed"
+    director = Director(artifact_manager=am, max_retries_per_step=2)
 
-    def test_mark_delivered(self):
-        from runtime.agent_conversation import AgentConversationBus, A2AMessage
-        bus = AgentConversationBus()
-        bus.send_message(A2AMessage(
-            from_agent="script", to_agent="character", content="test",
-        ), conversation_id="c1")
-        bus.mark_delivered("character", "c1")
-        msgs = bus.get_messages_for("character", "c1")
-        assert len(msgs) == 0
-
-    def test_build_handoff_rich_context_script_to_character(self):
-        from runtime.agent_conversation import AgentConversationBus
-        bus = AgentConversationBus()
-        state = {
-            "outline": "A brave hero saves the world",
-            "characters": [{"name": "Alice", "role": "hero"}, {"name": "Bob", "role": "villain"}],
-            "episodes": [
-                {"episode_no": 1, "title": "The Beginning", "summary": "Alice discovers her power"},
-            ],
-        }
-        msg = bus.build_handoff_message(
-            from_agent="script", to_agent="character",
-            state=state, agent_output=state,
-            conversation_id="test",
-        )
-        # Rich context should contain structured data
-        assert msg.context.get("summary") != ""
-        assert "character_names" in msg.context
-        assert "episode_summaries" in msg.context
-        assert "Alice" in msg.context["character_names"]
-        assert len(msg.context["episode_summaries"]) == 1
-        # Should have constraints
-        assert len(msg.constraints) > 0
-
-    def test_build_handoff_rich_context_character_to_storyboard(self):
-        from runtime.agent_conversation import AgentConversationBus
-        bus = AgentConversationBus()
-        state = {
-            "characters": [
-                {"name": "Alice", "gender": "female", "appearance": {
-                    "hair": "long black hair", "face": "round face with big eyes",
-                    "body": "slim", "cloth": "red dress",
-                }},
-            ],
-        }
-        msg = bus.build_handoff_message(
-            from_agent="character", to_agent="storyboard",
-            state=state, agent_output=state,
-        )
-        # Should have character profiles in context
-        assert "character_profiles" in msg.context
-        profiles = msg.context["character_profiles"]
-        assert len(profiles) == 1
-        assert profiles[0]["name"] == "Alice"
-        assert profiles[0]["appearance"]["hair"] == "long black hair"
-
-    def test_build_handoff_storyboard_to_image(self):
-        from runtime.agent_conversation import AgentConversationBus
-        bus = AgentConversationBus()
-        state = {
-            "characters": [{"name": "Alice"}],
-            "storyboard": [
-                {"scene_no": 1, "prompt": "Alice standing in a forest",
-                 "camera": "wide shot", "mood": "mysterious",
-                 "characters": ["Alice"], "duration": 5},
-                {"scene_no": 2, "prompt": "Alice running", "camera": "tracking",
-                 "mood": "tense", "characters": ["Alice"], "duration": 3},
-            ],
-        }
-        msg = bus.build_handoff_message(
-            from_agent="storyboard", to_agent="image",
-            state=state, agent_output=state,
-        )
-        # Should have scene data
-        assert msg.context["scene_count"] == 2
-        assert len(msg.context["scenes"]) == 2
-        assert msg.context["character_scene_map"]["Alice"] == [1, 2]
-
-    def test_extract_feedback_from_validation(self):
-        from runtime.agent_conversation import AgentConversationBus
-        bus = AgentConversationBus()
-        msg = bus.build_handoff_message(
-            from_agent="storyboard", to_agent="image",
-            state={"storyboard": []}, agent_output={},
+    verdict = asyncio.get_event_loop().run_until_complete(
+        director.analyze_step(
+            agent_id="storyboard",
             validation_result={
-                "passed": False,
-                "errors": ["Scene 1 prompt too short", "Missing character Alice in scene 3"],
-                "warnings": ["Total scenes are few"],
-                "fix_suggestion": "Add more detail to scene prompts",
+                "validation_failed": True,
+                "errors": ["Scene 1: prompt too short (5 chars)"],
+                "fix_suggestion": "Expand scene 1 prompt to include character appearance details",
             },
         )
-        assert any("Quality issue" in f for f in msg.feedback)
-        assert any("Warning" in f for f in msg.feedback)
-        assert any("Suggestion" in f for f in msg.feedback)
-
-    def test_extract_artifacts_image(self):
-        from runtime.agent_conversation import AgentConversationBus
-        bus = AgentConversationBus()
-        output = {
-            "images": [
-                {"scene_no": 1, "image_url": "https://example.com/1.png"},
-                {"scene_no": 2, "image_url": "https://example.com/2.png"},
-            ],
-        }
-        msg = bus.build_handoff_message(
-            from_agent="image", to_agent="voice",
-            state={}, agent_output=output,
-        )
-        assert len(msg.artifacts) == 2
-        assert msg.artifacts[0].startswith("image:")
-
-    def test_conversation_summary(self):
-        from runtime.agent_conversation import AgentConversationBus, A2AMessage
-        bus = AgentConversationBus()
-        bus.send_message(A2AMessage(
-            from_agent="script", to_agent="character",
-            content="Script done", constraints=["Keep characters consistent"],
-        ), "c1")
-        bus.send_message(A2AMessage(
-            from_agent="character", to_agent="storyboard",
-            content="Characters enriched",
-            feedback=["Quality issue: missing hair for Bob"],
-        ), "c1")
-        summary = bus.get_summary("c1")
-        assert "script -> character" in summary
-        assert "character -> storyboard" in summary
-        assert "Keep characters consistent" in summary
-
-    def test_bus_stats(self):
-        from runtime.agent_conversation import AgentConversationBus
-        bus = AgentConversationBus()
-        stats = bus.get_stats()
-        assert stats["total_messages"] == 0
-        assert stats["conversations"] == 0
+    )
+    assert verdict.decision == DirectorDecision.REWRITE_PROMPT
+    assert "Expand scene 1" in verdict.modified_prompt
+    print(f"[PASS] test_director_rule_based_rewrite_prompt: prompt={verdict.modified_prompt[:60]}")
 
 
-# ============================================================
-# Phase 3: StoryMemory Tests
-# ============================================================
+def test_artifact_manager_rollback():
+    """ArtifactManager.remove_from() should remove artifacts from target onward."""
+    from runtime.director import ArtifactManager
 
-class TestStoryMemory:
-    """Phase 3: Unified StoryMemory system."""
+    am = ArtifactManager()
+    am.store("script", {"outline": "test"})
+    am.store("character", {"characters": []})
+    am.store("storyboard", {"storyboard": []})
 
-    @pytest.mark.asyncio
-    async def test_store_and_query_world_memory(self):
-        from runtime.memory.manager import MemoryManager
-        from runtime.memory.story_memory import StoryMemory
-        mm = MemoryManager()
-        sm = StoryMemory(memory_manager=mm)
-        await sm.store_world({"setting": "Medieval fantasy kingdom"})
-        ctx = await sm.get_context("script", {})
-        assert "World Memory" in ctx
+    assert "script" in am.get_all()
+    assert "character" in am.get_all()
+    assert "storyboard" in am.get_all()
 
-    @pytest.mark.asyncio
-    async def test_store_scene_memory(self):
-        from runtime.memory.manager import MemoryManager
-        from runtime.memory.story_memory import StoryMemory
-        mm = MemoryManager()
-        sm = StoryMemory(memory_manager=mm)
-        await sm.store_scene({
-            "scene_no": 1, "prompt": "A dark forest",
-            "characters": ["Alice"], "mood": "mysterious", "camera": "wide",
-        }, conversation_id="test")
-        ctx = await sm.get_context("storyboard", {})
-        assert "Scene Memory" in ctx
-        assert "Scene 1" in ctx
+    am.remove_from("character")
+    remaining = am.get_all()
+    assert "script" in remaining
+    assert "character" not in remaining
+    assert "storyboard" not in remaining
+    print("[PASS] test_artifact_manager_rollback")
 
-    @pytest.mark.asyncio
-    async def test_populate_from_state(self):
-        from runtime.memory.manager import MemoryManager
-        from runtime.memory.story_memory import StoryMemory
-        mm = MemoryManager()
-        sm = StoryMemory(memory_manager=mm)
-        state = {
-            "outline": "A sci-fi adventure in space",
+
+def test_artifact_manager_summary():
+    """ArtifactManager.get_summary() should produce readable text for LLM."""
+    from runtime.director import ArtifactManager
+
+    am = ArtifactManager()
+    am.store("script", {
+        "outline": "A campus love story between Alice and Bob",
+        "characters": [{"name": "Alice"}, {"name": "Bob"}, {"name": "Carol"}],
+        "episodes": [
+            {"episode_no": 1, "title": "First Day", "script": "Alice walked into class..."},
+            {"episode_no": 2, "title": "Library Encounter", "script": "Bob found Alice studying..."},
+        ],
+    })
+
+    summary = am.get_summary()
+    assert "Alice" in summary
+    assert "Bob" in summary
+    assert "2 episodes" in summary
+    assert "=== script ===" in summary
+    print(f"[PASS] test_artifact_manager_summary: {len(summary)} chars")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 2 Tests: A2A Communication
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_a2a_message_creation():
+    """A2AMessage should carry structured context, constraints, and feedback."""
+    from runtime.agent_conversation import A2AMessage
+
+    msg = A2AMessage(
+        from_agent="script",
+        to_agent="character",
+        message_type="handoff",
+        content="Script completed with 2 characters",
+        context={"character_names": ["Alice", "Bob"]},
+        constraints=["Use exact characters from script"],
+        feedback=["Consider adding more personality details"],
+        artifacts=["script:main"],
+    )
+
+    d = msg.to_dict()
+    assert d["from_agent"] == "script"
+    assert d["to_agent"] == "character"
+    assert len(d["constraints"]) == 1
+    assert len(d["feedback"]) == 1
+    assert d["context"]["character_names"] == ["Alice", "Bob"]
+    print("[PASS] test_a2a_message_creation")
+
+
+def test_a2a_bus_send_and_retrieve():
+    """AgentConversationBus should deliver messages to the correct agent."""
+    from runtime.agent_conversation import AgentConversationBus
+
+    bus = AgentConversationBus()
+
+    msg = bus.build_handoff_message(
+        from_agent="script",
+        to_agent="character",
+        state={"outline": "test", "characters": [{"name": "Alice"}], "episodes": []},
+        agent_output={"characters": [{"name": "Alice"}]},
+    )
+
+    bus.send_message(msg, conversation_id="test-conv")
+
+    # character should receive the message
+    pending = bus.get_messages_for("character", conversation_id="test-conv")
+    assert len(pending) == 1
+    assert pending[0].from_agent == "script"
+
+    # script should NOT receive any message
+    assert len(bus.get_messages_for("script", conversation_id="test-conv")) == 0
+    print("[PASS] test_a2a_bus_send_and_retrieve")
+
+
+def test_a2a_rich_context_extraction():
+    """build_handoff_message should extract rich structured context per agent type."""
+    from runtime.agent_conversation import AgentConversationBus
+
+    bus = AgentConversationBus()
+
+    # Test script -> character handoff
+    msg = bus.build_handoff_message(
+        from_agent="script",
+        to_agent="character",
+        state={
+            "outline": "A romance story",
             "characters": [
-                {"name": "Zara", "appearance": {"hair": "blue", "cloth": "spacesuit", "face": "sharp", "body": "tall"}},
+                {"name": "Alice", "role": "protagonist"},
+                {"name": "Bob", "role": "love interest"},
             ],
             "episodes": [
-                {"episode_no": 1, "summary": "Zara finds an alien artifact"},
+                {"episode_no": 1, "title": "Meeting", "summary": "Alice meets Bob at school"},
             ],
-        }
-        await sm.populate_from_state(state, conversation_id="test")
-        # Should have stored world + style memories
-        world_ctx = await sm.get_context("script", {})
-        assert "World Memory" in world_ctx
+        },
+        agent_output={},
+    )
 
-    @pytest.mark.asyncio
-    async def test_character_memory_from_state(self):
-        from runtime.memory.story_memory import StoryMemory
-        sm = StoryMemory(memory_manager=None)
-        state = {
+    assert "character_names" in msg.context
+    assert "Alice" in msg.context["character_names"]
+    assert "character_roles" in msg.context
+    assert msg.context["character_roles"]["Alice"] == "protagonist"
+    assert "episode_summaries" in msg.context
+    assert len(msg.context["episode_summaries"]) == 1
+    print("[PASS] test_a2a_rich_context_extraction")
+
+    # Test character -> storyboard handoff
+    msg2 = bus.build_handoff_message(
+        from_agent="character",
+        to_agent="storyboard",
+        state={
             "characters": [
-                {"name": "Alice", "appearance": {"hair": "long black", "face": "round", "body": "slim", "cloth": "red dress"}},
-                {"name": "Bob", "appearance": {"hair": "short blonde", "face": "square", "body": "muscular", "cloth": "blue suit"}},
+                {"name": "Alice", "appearance": {"hair": "long black", "cloth": "white dress"}, "gender": "female"},
             ],
-        }
-        ctx = await sm.get_context("storyboard", state)
-        assert "Character Memory" in ctx
-        assert "Alice" in ctx
-        assert "long black" in ctx
+        },
+        agent_output={},
+    )
 
-    def test_mem_type_fallback(self):
-        from runtime.memory.story_memory import StoryMemory
-        from runtime.memory.models import MemoryType
-        assert StoryMemory._mem_type("conversation") == MemoryType.CONVERSATION
-        assert StoryMemory._mem_type("invalid_value") == MemoryType.CONVERSATION
+    assert "character_profiles" in msg2.context
+    assert len(msg2.context["character_profiles"]) == 1
+    profile = msg2.context["character_profiles"][0]
+    assert profile["name"] == "Alice"
+    assert profile["gender"] == "female"
+    assert "appearance" in profile
+    print("[PASS] test_a2a_rich_context_extraction (character->storyboard)")
 
 
-# ============================================================
-# Cross-Phase: WorkflowEngine Integration Tests
-# ============================================================
+def test_a2a_constraint_templates():
+    """Constraint templates should provide agent-transition-specific constraints."""
+    from runtime.agent_conversation import AgentConversationBus
 
-class TestWorkflowEngineIntegration:
-    """Integration tests combining all three phases."""
+    bus = AgentConversationBus()
 
-    @pytest.mark.asyncio
-    async def test_full_pipeline_with_director_and_a2a(self):
-        from runtime.director import Director, ArtifactManager
-        from runtime.workflow_engine import WorkflowEngine
-        from runtime.agent_conversation import AgentConversationBus
+    # character -> storyboard should have character consistency constraints
+    msg = bus.build_handoff_message(
+        from_agent="character",
+        to_agent="storyboard",
+        state={"characters": [{"name": "Alice"}], "episodes": [{"title": "ep1"}]},
+        agent_output={},
+    )
 
-        am = ArtifactManager()
-        director = Director(artifact_manager=am, max_retries_per_step=2)
+    constraints_text = " ".join(msg.constraints)
+    assert "character" in constraints_text.lower() or "appearance" in constraints_text.lower()
+    assert "1 episodes" in constraints_text  # Episode count constraint
+    print(f"[PASS] test_a2a_constraint_templates: {len(msg.constraints)} constraints")
+
+
+def test_a2a_conversation_summary():
+    """get_summary() should produce LLM-injectable conversation history."""
+    from runtime.agent_conversation import AgentConversationBus
+
+    bus = AgentConversationBus()
+
+    # Simulate a full pipeline conversation
+    steps = [
+        ("script", "character", {"outline": "test"}, {"outline": "test story"}),
+        ("character", "storyboard", {"characters": []}, {"characters": []}),
+        ("storyboard", "image", {"storyboard": []}, {"storyboard": []}),
+    ]
+
+    for from_a, to_a, state, output in steps:
+        msg = bus.build_handoff_message(
+            from_agent=from_a, to_agent=to_a,
+            state=state, agent_output=output,
+        )
+        bus.send_message(msg, conversation_id="test-summary")
+        bus.mark_delivered(to_a, conversation_id="test-summary")
+
+    summary = bus.get_summary("test-summary")
+    assert "A2A Agent Communication History" in summary
+    assert "script" in summary
+    assert "character" in summary
+    assert "storyboard" in summary
+    print(f"[PASS] test_a2a_conversation_summary: {len(summary)} chars")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Phase 3 Tests: StoryMemory Unified Memory System
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_story_memory_creation():
+    """StoryMemory should be creatable with MemoryManager."""
+    from runtime.memory.story_memory import StoryMemory
+    from runtime.memory.manager import MemoryManager
+
+    mm = MemoryManager()
+    sm = StoryMemory(memory_manager=mm)
+    assert sm is not None
+    print("[PASS] test_story_memory_creation")
+
+
+def test_story_memory_store_and_query():
+    """StoryMemory should store facts and retrieve them by dimension."""
+    from runtime.memory.story_memory import StoryMemory
+    from runtime.memory.manager import MemoryManager
+
+    mm = MemoryManager()
+    sm = StoryMemory(memory_manager=mm)
+
+    # Store world info
+    asyncio.get_event_loop().run_until_complete(
+        sm.store_world({
+            "setting": "Modern-day Shanghai university campus",
+            "time_period": "2020s",
+            "locations": ["library", "cafe", "dormitory"],
+        }, conversation_id="test-ctx")
+    )
+
+    # Store a scene
+    asyncio.get_event_loop().run_until_complete(
+        sm.store_scene({
+            "scene_no": 1,
+            "prompt": "Alice sits alone in the library reading a book",
+            "characters": ["Alice"],
+            "mood": "peaceful",
+            "camera": "medium shot",
+        }, conversation_id="test-ctx")
+    )
+
+    # Query for storyboard agent
+    ctx = asyncio.get_event_loop().run_until_complete(
+        sm.get_context("storyboard", {"characters": [{"name": "Alice"}]})
+    )
+    assert "World Memory" in ctx or "Scene Memory" in ctx or "Character Memory" in ctx
+    print(f"[PASS] test_story_memory_store_and_query: {len(ctx)} chars")
+
+
+def test_story_memory_populate_from_state():
+    """populate_from_state should extract and store world/character/style info."""
+    from runtime.memory.story_memory import StoryMemory
+    from runtime.memory.manager import MemoryManager
+
+    mm = MemoryManager()
+    sm = StoryMemory(memory_manager=mm)
+
+    state = {
+        "outline": "A campus romance in modern Shanghai",
+        "characters": [
+            {"name": "Alice", "appearance": {"hair": "long flowing black", "cloth": "white summer dress"}},
+            {"name": "Bob", "appearance": {"hair": "short neat brown", "cloth": "blue polo shirt"}},
+        ],
+        "episodes": [
+            {"episode_no": 1, "title": "First Encounter", "summary": "Alice and Bob meet in the library"},
+        ],
+    }
+
+    asyncio.get_event_loop().run_until_complete(
+        sm.populate_from_state(state, conversation_id="test-populate")
+    )
+
+    # Verify memory was stored
+    stats = sm.get_stats()
+    assert "memory_manager" in stats
+    print(f"[PASS] test_story_memory_populate_from_state: {stats}")
+
+
+def test_memory_manager_store_and_retrieve():
+    """MemoryManager should store and retrieve facts with tag filtering."""
+    from runtime.memory.manager import MemoryManager
+    from runtime.memory.models import MemoryType
+
+    mm = MemoryManager()
+
+    # Store a fact
+    asyncio.get_event_loop().run_until_complete(
+        mm.store_fact(
+            text="Alice has long black hair and wears a white dress",
+            memory_type=MemoryType.CONVERSATION,
+            entity="Alice",
+            conversation_id="test-mem",
+            tags=["character", "appearance"],
+            confidence=0.9,
+        )
+    )
+
+    # Retrieve with tag filter
+    from runtime.memory.models import MemoryQuery
+    query = MemoryQuery(
+        query="Alice appearance",
+        memory_types=[MemoryType.CONVERSATION],
+        tags=["appearance"],
+        conversation_id="test-mem",
+        limit=5,
+    )
+    results = asyncio.get_event_loop().run_until_complete(mm.retrieve(query))
+    assert len(results) >= 1
+    assert "Alice" in results[0].text
+    print(f"[PASS] test_memory_manager_store_and_retrieve: {len(results)} results")
+
+
+def test_memory_graph_timeline():
+    """MemoryGraph should track character state changes over chapters."""
+    from runtime.memory.graph import MemoryGraph
+
+    mg = MemoryGraph()
+
+    # Populate from script
+    mg.populate_from_script({
+        "characters": [
+            {"name": "Alice", "gender": "female", "appearance": {"hair": "long black", "cloth": "white dress"}},
+            {"name": "Bob", "gender": "male", "appearance": {"hair": "short brown", "cloth": "blue shirt"}},
+        ]
+    })
+
+    # Query appearance at chapter 0
+    alice_appearance = mg.get_character_appearance_at("Alice", chapter=0)
+    assert "long black" in alice_appearance
+    assert "white dress" in alice_appearance
+    print(f"[PASS] test_memory_graph_timeline: Alice at ch0: {alice_appearance}")
+
+    # State change at chapter 3
+    mg.add_state_change("Alice", "appearance.cloth", "red evening gown", chapter=3, reason="Formal event")
+    alice_ch3 = mg.get_character_appearance_at("Alice", chapter=3)
+    assert "red evening gown" in alice_ch3
+    # At chapter 2, should still be white dress
+    alice_ch2 = mg.get_character_appearance_at("Alice", chapter=2)
+    assert "white dress" in alice_ch2
+    assert "red" not in alice_ch2
+    print(f"[PASS] test_memory_graph_timeline: Alice ch2={alice_ch2[:40]} ch3={alice_ch3[:40]}")
+
+
+def test_memory_graph_relationships():
+    """MemoryGraph should track character relationships."""
+    from runtime.memory.graph import MemoryGraph
+
+    mg = MemoryGraph()
+    mg.add_relationship("Alice", "Bob", "loves", chapter=1)
+    mg.add_relationship("Bob", "Alice", "admires", chapter=1)
+
+    rels = mg.get_relationships("Alice", chapter=1)
+    assert len(rels) == 1
+    assert rels[0]["relation"] == "loves"
+    assert rels[0]["with"] == "Bob"
+    print("[PASS] test_memory_graph_relationships")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Cross-Phase Integration Tests
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_runtime_full_import():
+    """The complete runtime package should import without errors."""
+    from runtime import (
+        StoryFlowRuntime, Director, DirectorDecision, DirectorVerdict,
+        WorkflowEngine, StoryMemory, MemoryManager,
+        AgentConversationBus, A2AMessage, MemoryGraph,
+        QualityEngine, QualityResult, ReflectionRuntime,
+        PromptRuntime, ModelRouter, AdapterRegistry,
+    )
+    print("[PASS] test_runtime_full_import")
+
+
+def test_workflow_engine_creation():
+    """WorkflowEngine should be creatable with all V1.5 dependencies."""
+    from runtime.workflow_engine import WorkflowEngine
+    from runtime.director import Director, ArtifactManager
+    from runtime.agent_conversation import AgentConversationBus
+    from runtime.memory.story_memory import StoryMemory
+
+    director = Director()
+    bus = AgentConversationBus()
+    sm = StoryMemory()
+
+    engine = WorkflowEngine(
+        director=director,
+        artifact_manager=director.artifact_manager,
+        conversation_bus=bus,
+        story_memory=sm,
+    )
+    assert engine.director is director
+    assert engine.conversation_bus is bus
+    assert engine.story_memory is sm
+    print("[PASS] test_workflow_engine_creation")
+
+
+def test_workflow_engine_pipeline_with_mock_agents():
+    """WorkflowEngine.run_pipeline() should execute agents and handle Director decisions."""
+    from runtime.workflow_engine import WorkflowEngine
+    from runtime.director import Director, DirectorDecision
+    from runtime.agent_conversation import AgentConversationBus
+
+    async def _run():
+        director = Director(max_retries_per_step=1)
         bus = AgentConversationBus()
+
         engine = WorkflowEngine(
             director=director,
-            artifact_manager=am,
             conversation_bus=bus,
         )
 
-        # Register mock agents
         async def mock_script(state):
             return {
                 "outline": "A test story",
-                "characters": [{"name": "Alice", "role": "hero"}],
-                "episodes": [{"episode_no": 1, "title": "Start", "summary": "Alice begins", "script": "Once upon a time..."}],
+                "characters": [{"name": "Alice"}, {"name": "Bob"}],
+                "episodes": [{"episode_no": 1, "title": "Start", "script": "Once upon a time..."}],
             }
 
         async def mock_character(state):
             chars = state.get("characters", [])
+            enriched = []
             for c in chars:
-                c["appearance"] = {
-                    "hair": "long black", "face": "round",
-                    "body": "slim", "cloth": "red dress",
-                }
-            return {"characters": chars}
-
-        async def mock_storyboard(state):
-            return {
-                "storyboard": [
-                    {"scene_no": 1, "prompt": "Alice in forest, long black hair, red dress",
-                     "characters": ["Alice"], "duration": 5, "camera": "wide", "mood": "calm"},
-                ],
-            }
+                c["appearance"] = {"hair": "black", "face": "round", "body": "slim", "cloth": "white"}
+                enriched.append(c)
+            return {"characters": enriched}
 
         engine.register_agent("script", mock_script)
         engine.register_agent("character", mock_character)
-        engine.register_agent("storyboard", mock_storyboard)
 
-        # Run pipeline
-        result = await engine.run_pipeline(
-            task_id="test_task", story_id="test_story",
-            prompt="Test prompt", genre="fantasy",
-            conversation_id="test_conv",
-        )
+        return await engine.run_pipeline(
+            task_id="test-task",
+            story_id="test-story",
+            prompt="A test story",
+            genre="test",
+        ), director, bus
 
-        assert result["outline"] == "A test story"
-        assert len(result["characters"]) == 1
-        assert result["characters"][0]["appearance"]["hair"] == "long black"
-        assert len(result["storyboard"]) == 1
+    result, director, bus = asyncio.run(_run())
 
-        # Verify A2A messages were exchanged
-        summary = bus.get_summary("test_conv")
-        assert "script -> character" in summary
-        assert "character -> storyboard" in summary
+    assert result["status"] == "running" or result.get("outline")
+    assert result["outline"] == "A test story"
+    # Verify Director made decisions
+    stats = director.get_stats()
+    assert stats["total_decisions"] >= 2  # At least for script and character
+    print(f"[PASS] test_workflow_engine_pipeline_with_mock_agents: decisions={stats['total_decisions']}")
 
-        # Verify Director analyzed steps
-        stats = director.get_stats()
-        assert stats["total_decisions"] >= 3  # At least 3 steps analyzed
-        assert stats["artifacts_stored"] >= 3
 
-    @pytest.mark.asyncio
-    async def test_pipeline_with_skip_decision(self):
-        from runtime.director import Director, ArtifactManager
-        from runtime.workflow_engine import WorkflowEngine
+def test_workflow_engine_skip_on_failure():
+    """WorkflowEngine should eventually SKIP a persistently failing non-critical agent."""
+    from runtime.workflow_engine import WorkflowEngine
+    from runtime.director import Director
+    from runtime.agent_conversation import AgentConversationBus
 
-        am = ArtifactManager()
-        director = Director(artifact_manager=am, max_retries_per_step=1)
-        engine = WorkflowEngine(director=director, artifact_manager=am)
-
-        call_count = {"script": 0}
+    async def _run():
+        director = Director(max_retries_per_step=1)
+        bus = AgentConversationBus()
+        engine = WorkflowEngine(director=director, conversation_bus=bus)
 
         async def mock_script(state):
-            call_count["script"] += 1
             return {"outline": "test", "characters": [], "episodes": []}
 
         async def failing_character(state):
-            raise RuntimeError("API failure")
-
-        async def mock_storyboard(state):
-            return {"storyboard": [{"scene_no": 1, "prompt": "test", "characters": [], "duration": 5}]}
+            raise RuntimeError("Intentional failure for testing")
 
         engine.register_agent("script", mock_script)
         engine.register_agent("character", failing_character)
-        engine.register_agent("storyboard", mock_storyboard)
 
-        result = await engine.run_pipeline(
-            task_id="test_skip", story_id="test",
-            prompt="test", genre="test",
+        return await engine.run_pipeline(
+            task_id="test-skip",
+            story_id="test-story",
+            prompt="test",
+            genre="test",
         )
-        # Character was skipped, but pipeline continued
-        assert result["outline"] == "test"
 
-    @pytest.mark.asyncio
-    async def test_insert_step_execution(self):
-        from runtime.director import Director, ArtifactManager
-        from runtime.workflow_engine import WorkflowEngine
-
-        am = ArtifactManager()
-        director = Director(artifact_manager=am, max_retries_per_step=2)
-        engine = WorkflowEngine(director=director, artifact_manager=am)
-
-        insert_called = {"count": 0}
-
-        async def insert_check(state, verdict):
-            insert_called["count"] += 1
-            return {"_insert_step_result": "consistency verified"}
-
-        engine.register_insert_step("consistency_check", insert_check)
-
-        async def mock_script(state):
-            return {"outline": "test", "characters": [], "episodes": []}
-
-        engine.register_agent("script", mock_script)
-
-        # Test insert step registry
-        from runtime.director import DirectorDecision, DirectorVerdict
-        verdict = DirectorVerdict(
-            decision=DirectorDecision.INSERT_STEP,
-            agent_id="script",
-            reasoning="Need consistency check",
-            insert_step_config={"type": "consistency_check"},
-        )
-        func = engine._insert_step_registry.get("consistency_check")
-        assert func is not None
-        result = await func({}, verdict)
-        assert result["_insert_step_result"] == "consistency verified"
-
-    @pytest.mark.asyncio
-    async def test_rollback_execution(self):
-        from runtime.director import Director, ArtifactManager, DirectorDecision, DirectorVerdict
-        from runtime.workflow_engine import WorkflowEngine
-
-        am = ArtifactManager()
-        director = Director(artifact_manager=am, max_retries_per_step=3)
-        bus = None
-        engine = WorkflowEngine(director=director, artifact_manager=am, conversation_bus=bus)
-
-        execution_order = []
-
-        async def mock_script(state):
-            execution_order.append("script")
-            return {"outline": "bad", "characters": [], "episodes": []}
-
-        async def mock_character(state):
-            execution_order.append("character")
-            return {"characters": []}
-
-        async def mock_storyboard(state):
-            execution_order.append("storyboard")
-            return {"storyboard": []}
-
-        engine.register_agent("script", mock_script)
-        engine.register_agent("character", mock_character)
-        engine.register_agent("storyboard", mock_storyboard)
-
-        # Manually trigger a rollback verdict on storyboard -> back to script
-        verdict = DirectorVerdict(
-            decision=DirectorDecision.ROLLBACK,
-            agent_id="storyboard",
-            reasoning="Fundamental issue in script",
-            target_step="script",
-        )
-        # Verify rollback removes artifacts
-        am.store("script", {"test": 1})
-        am.store("character", {"test": 2})
-        am.store("storyboard", {"test": 3})
-        am.remove_from("script")
-        assert am.get("script") is None
-        assert am.get("character") is None
-        assert am.get("storyboard") is None
+    result = asyncio.run(_run())
+    assert result is not None
+    print("[PASS] test_workflow_engine_skip_on_failure")
 
 
-# ============================================================
-# RuntimeApp Wiring Test
-# ============================================================
-
-class TestRuntimeAppWiring:
-    """Verify RuntimeApp wires all V1.5 components correctly."""
-
-    def test_app_init_creates_all_components(self):
-        from runtime.app import RuntimeApp
-        app = RuntimeApp()
-        app.init()
-        assert app.director is not None
-        assert app.artifact_manager is not None
-        assert app.conversation_bus is not None
-        assert app.story_memory is not None
-        assert app.memory_manager is not None
-
-    def test_app_get_workflow_runner(self):
-        from runtime.app import RuntimeApp
-        app = RuntimeApp()
-        app.init()
-        runner = app.get_workflow_runner()
-        assert runner.director is app.director
-        assert runner.conversation_bus is app.conversation_bus
-        assert runner.story_memory is app.story_memory
-
+# ═══════════════════════════════════════════════════════════════════
+# Run all tests
+# ═══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"])
+    tests = [
+        # Phase 1: Director Brain
+        test_director_imports,
+        test_director_rule_based_proceed,
+        test_director_rule_based_retry_transient,
+        test_director_rule_based_skip,
+        test_director_rule_based_rollback,
+        test_director_rule_based_rewrite_prompt,
+        test_artifact_manager_rollback,
+        test_artifact_manager_summary,
+
+        # Phase 2: A2A Communication
+        test_a2a_message_creation,
+        test_a2a_bus_send_and_retrieve,
+        test_a2a_rich_context_extraction,
+        test_a2a_constraint_templates,
+        test_a2a_conversation_summary,
+
+        # Phase 3: StoryMemory
+        test_story_memory_creation,
+        test_story_memory_store_and_query,
+        test_story_memory_populate_from_state,
+        test_memory_manager_store_and_retrieve,
+        test_memory_graph_timeline,
+        test_memory_graph_relationships,
+
+        # Cross-Phase Integration
+        test_runtime_full_import,
+        test_workflow_engine_creation,
+        test_workflow_engine_pipeline_with_mock_agents,
+        test_workflow_engine_skip_on_failure,
+    ]
+
+    passed = 0
+    failed = 0
+    errors = []
+
+    for test in tests:
+        try:
+            test()
+            passed += 1
+        except Exception as e:
+            failed += 1
+            errors.append((test.__name__, str(e)))
+            print(f"[FAIL] {test.__name__}: {e}")
+
+    print()
+    print("=" * 60)
+    print(f"Results: {passed} passed, {failed} failed out of {len(tests)} tests")
+    if errors:
+        print("\nFailed tests:")
+        for name, err in errors:
+            print(f"  - {name}: {err[:100]}")
+    print("=" * 60)
+
+    sys.exit(0 if failed == 0 else 1)

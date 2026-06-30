@@ -1,23 +1,33 @@
 """StoryFlow Runtime - Unified Agent Runtime for AI content creation.
 
-Architecture:
+Architecture (V5.0 - V1.5 Runtime Upgrade Complete):
     StoryFlowRuntime (core.py)
-    ├── WorkflowEngine  - Pipeline execution with DSL, hooks, retry, parallelism
+    ├── WorkflowEngine  - Pipeline execution with Director decisions, A2A, StoryMemory
     ├── EventBus        - Async pub/sub for decoupled communication
     ├── Blackboard      - Shared state with dotted-key access
     ├── ArtifactManager - File-based artifact storage + checkpoints
     ├── SessionManager  - Session tracking + partial regeneration
     ├── HookFramework   - Before/after/error hooks (cross-cutting concerns)
-    ├── DirectorAgent   - Decision making: retry/rollback/skip/abort
+    ├── Director        - LLM-powered 5-decision brain (retry/rollback/rewrite/skip/insert)
     ├── PlannerAgent    - Task decomposition into DAG
     ├── QualityEngine   - Multi-dimensional quality checking
     ├── AdapterRegistry - Pluggable model backends (LLM/Image/Voice/Video)
     ├── AgentRegistry   - Agent discovery + BaseAgent SDK
+    ├── MemoryManager   - 4-layer memory hierarchy (working/session/conversation/long-term)
+    ├── StoryMemory     - Unified 7-dimensional memory (Scene/Visual/Style/World + Character/Timeline)
     ├── ReflectionRuntime - Post-step analysis (good/bad/suggestion)
-    ├── PromptRuntime   - Dynamic prompt construction
-    ├── MemoryGraph      - Timeline-aware graph memory
-    ├── AgentConversationBus - Inter-agent discussion
-    └── ModelRouter      - Intelligent model selection
+    ├── PromptRuntime   - Dynamic prompt construction from memory
+    ├── MemoryGraph     - Timeline-aware graph memory for characters/world
+    ├── AgentConversationBus - A2A structured context/feedback/constraint passing
+    ├── ModelRouter     - Intelligent model selection per task type
+    └── RetryEngine     - Strategy-based retry with pluggable policies
+
+All model backends use cloud APIs (no local GPU required):
+    - LLM: OpenAI-compatible API (GPT-4o / Qwen / DeepSeek)
+    - Image: DashScope Wanx / DALL-E 3 / ComfyUI (SDXL) [optional local]
+    - TTS: DashScope CosyVoice / OpenAI TTS
+    - Image-to-Video: Kling / Runway
+    - Video Assembly: FFmpeg (local)
 
 Usage:
     runtime = StoryFlowRuntime()
@@ -41,23 +51,30 @@ from runtime.session_manager import SessionManager, Session, SessionStatus, get_
 from runtime.hooks import HookFramework, StepContext, HookAbort, ErrorAction
 
 # Execution
-from runtime.workflow_engine import WorkflowEngine, PipelineStep
+from runtime.workflow_engine import WorkflowEngine
 
 # Intelligence
-from runtime.director import DirectorAgent, Decision, DecisionType
+from runtime.director import Director, DirectorDecision, DirectorVerdict
 from runtime.planner import PlannerAgent, ExecutionPlan, TaskNode
 from runtime.quality import QualityEngine, QualityResult
 
 # V1.5 Runtime Layers
 from runtime.retry_engine import RetryEngine, RetryPolicy, RetryAction, RetryResult
-from runtime.memory import MemoryRuntime, get_memory_runtime
 from runtime.trace import TraceRuntime, Span, TraceTree, get_trace_runtime
+
+# Memory System (Phase 3)
+from runtime.memory.manager import MemoryManager
+from runtime.memory.story_memory import StoryMemory
+from runtime.memory.models import MemoryEntry, MemoryQuery, MemoryType
+from runtime.memory.character_memory import CharacterMemory
+from runtime.memory.world_memory import WorldMemory
+from runtime.memory.timeline_memory import TimelineMemory
 
 # V1.5 Runtime Upgrades
 from runtime.reflection import ReflectionRuntime, ReflectionResult
 from runtime.prompt_runtime import PromptRuntime
 from runtime.memory.graph import MemoryGraph, MemoryNode, MemoryEdge
-from runtime.agent_conversation import AgentConversationBus, AgentMessage, MessageType
+from runtime.agent_conversation import AgentConversationBus, A2AMessage
 from runtime.model_router import ModelRouter, ModelRoute
 
 # Extensibility
@@ -74,20 +91,26 @@ __all__ = [
     "SessionManager", "Session", "SessionStatus", "get_session_manager",
     "HookFramework", "StepContext", "HookAbort", "ErrorAction",
     # Execution
-    "WorkflowEngine", "PipelineStep",
+    "WorkflowEngine",
     # Intelligence
-    "DirectorAgent", "Decision", "DecisionType",
+    "Director", "DirectorDecision", "DirectorVerdict",
     "PlannerAgent", "ExecutionPlan", "TaskNode",
     "QualityEngine", "QualityResult",
     # V1.5 Runtime Layers
     "RetryEngine", "RetryPolicy", "RetryAction", "RetryResult",
-    "MemoryRuntime", "get_memory_runtime",
     "TraceRuntime", "Span", "TraceTree", "get_trace_runtime",
+    # Memory System (Phase 3)
+    "MemoryManager",
+    "StoryMemory",
+    "MemoryEntry", "MemoryQuery", "MemoryType",
+    "CharacterMemory",
+    "WorldMemory",
+    "TimelineMemory",
     # V1.5 Runtime Upgrades
     "ReflectionRuntime", "ReflectionResult",
     "PromptRuntime",
     "MemoryGraph", "MemoryNode", "MemoryEdge",
-    "AgentConversationBus", "AgentMessage", "MessageType",
+    "AgentConversationBus", "A2AMessage",
     "ModelRouter", "ModelRoute",
     # Extensibility
     "AdapterRegistry",

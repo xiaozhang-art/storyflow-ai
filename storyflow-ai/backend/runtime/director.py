@@ -23,8 +23,7 @@ import time
 from enum import Enum
 from typing import Any, Optional
 
-from runtime.hook.dispatcher import HookEvent, HookHandler, get_hook_dispatcher
-from runtime.hook import events as hook_events
+from runtime.event_bus import EventBus, EventType, get_event_bus
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +204,7 @@ class Director:
         llm_call=None,
         max_retries_per_step: int = 2,
         max_total_decisions: int = 10,
+        event_bus: EventBus | None = None,
     ):
         self.artifact_manager = artifact_manager or ArtifactManager()
         self.session_manager = session_manager
@@ -214,7 +214,7 @@ class Director:
         self._step_retry_counts: dict[str, int] = {}
         self._total_decisions: int = 0
         self._decision_history: list[dict] = []
-        self.hooks = get_hook_dispatcher()
+        self.event_bus = event_bus if event_bus is not None else get_event_bus()
 
     async def analyze_step(
         self,
@@ -277,12 +277,13 @@ class Director:
         logger.info("Director verdict: %s -> %s (confidence=%.2f)",
                      agent_id, verdict.decision.value, verdict.confidence)
 
-        await self.hooks.emit(HookEvent(
-            name="DIRECTOR_DECISION",
-            payload=verdict.to_dict(),
-            trace_id=trace_id, session_id="",
-            conversation_id=conversation_id, agent_id=agent_id,
-        ))
+        if self.event_bus:
+            await self.event_bus.publish_event(
+                EventType.DIRECTOR_DECISION,
+                data=verdict.to_dict(),
+                session_id="",
+                source="director",
+            )
 
         return verdict
 
@@ -456,21 +457,3 @@ Respond with ONLY a JSON object containing your decision."""
             "artifacts_stored": len(self.artifact_manager.get_all()),
             "decision_history": self._decision_history[-10:],
         }
-
-
-def create_director_hook(director: Director) -> HookHandler:
-    """Create a hook handler that triggers Director analysis after each agent step."""
-    async def handler(event: HookEvent):
-        if event.name != hook_events.AFTER_AGENT:
-            return
-        agent_id = event.payload.get("agent_id", "")
-        output = event.payload.get("output", {})
-        error = event.payload.get("error")
-        validation_result = event.payload.get("validation_result")
-        verdict = await director.analyze_step(
-            agent_id=agent_id, output=output, error=error,
-            validation_result=validation_result,
-            conversation_id=event.conversation_id, trace_id=event.trace_id,
-        )
-        event.payload["director_verdict"] = verdict.to_dict()
-    return handler

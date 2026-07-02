@@ -100,7 +100,7 @@ const HomePage: React.FC = () => {
         prompt: values.prompt,
         genre: values.genre,
       });
-      const { task_id } = await startGeneration(story.id);
+      await startGeneration(story.id);
       message.success('漫剧生成已启动！');
       navigate(`/story/${story.id}`);
     } catch {

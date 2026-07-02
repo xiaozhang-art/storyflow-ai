@@ -26,9 +26,10 @@ class StoryService:
 
     async def list_stories(
         self, db: AsyncSession, skip: int = 0, limit: int = 20
-    ) -> list[Story]:
+    ) -> dict:
         """List all stories, newest first."""
-        return await story_repo.list_stories(db, skip=skip, limit=limit)
+        stories = await story_repo.list_stories(db, skip=skip, limit=limit)
+        return {"items": stories}
 
     async def start_generation(self, db: AsyncSession, story_id: UUID):
         """Start the story generation workflow."""

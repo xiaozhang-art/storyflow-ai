@@ -19,9 +19,9 @@ STEP_PROGRESS = {
     "script": 10,
     "character": 20,
     "storyboard": 30,
-    "image": 50,
-    "image_to_video": 65,
-    "voice": 80,
+    "image": 45,
+    "image_to_video": 60,
+    "voice": 75,
     "video": 95,
     "done": 100,
 }

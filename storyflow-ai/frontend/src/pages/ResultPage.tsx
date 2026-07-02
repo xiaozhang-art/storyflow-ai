@@ -9,7 +9,7 @@ import {
   SoundOutlined, PictureOutlined,
 } from '@ant-design/icons';
 import { getStoryResult } from '../api';
-import type { StoryResultResponse, SceneResult, CharacterResult } from '../types';
+import type { StoryResultResponse, CharacterResult } from '../types';
 
 const { Title, Text, Paragraph } = Typography;
 

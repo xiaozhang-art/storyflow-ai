@@ -11,7 +11,7 @@ const App: React.FC = () => {
       locale={zhCN}
       theme={{
         token: {
-          primaryColor: '#1677ff',
+          colorPrimary: '#1677ff',
         },
       }}
     >

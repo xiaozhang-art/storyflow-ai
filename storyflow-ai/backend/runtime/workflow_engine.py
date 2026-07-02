@@ -37,11 +37,14 @@ class WorkflowEngine:
     Additionally, between steps, A2A messages carry structured context,
     constraints, and feedback to the next agent.
     """
-    PIPELINE_ORDER = ["script", "character", "storyboard", "image", "voice", "video"]
+    PIPELINE_ORDER = [
+        "script", "character", "storyboard", "image",
+        "image_to_video", "voice", "video",
+    ]
     MAX_ROLLBACKS = 2
     STEP_PROGRESS = {
-        "init": 0, "script": 10, "character": 25, "storyboard": 40,
-        "image": 65, "voice": 80, "video": 95, "done": 100,
+        "init": 0, "script": 10, "character": 20, "storyboard": 30,
+        "image": 45, "image_to_video": 60, "voice": 75, "video": 95, "done": 100,
     }
 
     def __init__(
@@ -60,6 +63,7 @@ class WorkflowEngine:
         self._registered_agents: dict[str, LegacyAgentFunc] = {}
         self._rollback_count = 0
         self._insert_step_registry: dict[str, Callable] = {}
+        self._dsl_config: dict[str, Any] = {}
 
     def register_insert_step(self, step_type: str, func: Callable):
         """Register a custom insert step function.
@@ -104,6 +108,30 @@ class WorkflowEngine:
         """Register an agent function for the pipeline."""
         self._registered_agents[agent_id] = agent_func
         logger.info("[WorkflowEngine] Agent registered: %s", agent_id)
+
+    def load_dsl(self, dsl_path: str) -> None:
+        """Load pipeline definition from a YAML DSL file."""
+        import os
+        import yaml
+
+        if not os.path.exists(dsl_path):
+            logger.warning("[WorkflowEngine] DSL file not found: %s", dsl_path)
+            return
+
+        with open(dsl_path, encoding="utf-8") as f:
+            dsl = yaml.safe_load(f) or {}
+
+        steps = dsl.get("steps", [])
+        pipeline = [step["agent"] for step in steps if step.get("agent")]
+        if pipeline:
+            self.PIPELINE_ORDER = pipeline
+            logger.info(
+                "[WorkflowEngine] Loaded DSL %s: pipeline=%s",
+                dsl_path,
+                self.PIPELINE_ORDER,
+            )
+
+        self._dsl_config = dsl
 
     async def run_pipeline(
         self,

@@ -1,7 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from models.base import Base, TimestampMixin
@@ -19,6 +18,6 @@ class Character(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     gender: Mapped[str | None] = mapped_column(String(20), nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    appearance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    personality: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    appearance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    personality: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)

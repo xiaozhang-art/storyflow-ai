@@ -67,7 +67,11 @@ def _normalize_scene(scene: dict, index: int) -> dict:
 async def _generate_storyboard_for_episode(
     episode: dict, character_descriptions: str, llm,
 ) -> list[dict]:
-    """Generate storyboard scenes for a single episode."""
+    """Generate storyboard scenes for a single episode.
+
+    DeepSeek V4 Flash (reasoning model) returns a plain JSON array like
+    [{"scene": 1, ...}, ...]. Accept both that and {"scenes": [...]}.
+    """
     min_scenes, max_scenes = settings.SCENES_PER_EPISODE
 
     chat_prompt = ChatPromptTemplate.from_messages([
@@ -75,29 +79,7 @@ async def _generate_storyboard_for_episode(
         ("human", STORYBOARD_USER_PROMPT),
     ])
 
-    # Strategy 1: PydanticOutputParser
-    try:
-        parser = PydanticOutputParser(pydantic_object=StoryboardOutput)
-        chain = chat_prompt | llm | parser
-
-        result = await chain.ainvoke({
-            "episode_no": episode.get("episode_no", 1),
-            "title": episode.get("title", ""),
-            "summary": episode.get("summary", ""),
-            "script": episode.get("script", ""),
-            "character_descriptions": character_descriptions,
-            "min_scenes": min_scenes,
-            "max_scenes": max_scenes,
-            "format_instructions": parser.get_format_instructions(),
-        })
-
-        scenes = [_normalize_scene(s.model_dump(), i) for i, s in enumerate(result.scenes)]
-        if scenes:
-            return scenes
-    except Exception as e:
-        logger.warning("PydanticOutputParser failed, falling back to raw JSON: %s", e)
-
-    # Strategy 2: Raw LLM output + json_helper
+    parser = PydanticOutputParser(pydantic_object=StoryboardScene)
     chain = chat_prompt | llm
     response = await chain.ainvoke({
         "episode_no": episode.get("episode_no", 1),
@@ -107,16 +89,25 @@ async def _generate_storyboard_for_episode(
         "character_descriptions": character_descriptions,
         "min_scenes": min_scenes,
         "max_scenes": max_scenes,
-        "format_instructions": "",
+        "format_instructions": parser.get_format_instructions(),
     })
 
-    parsed = parse_json_response(response.content.strip())
+    content = response.content if isinstance(response.content, str) else str(response.content)
+    parsed = parse_json_response(content.strip())
     if isinstance(parsed, dict) and "scenes" in parsed:
         parsed = parsed["scenes"]
     if not isinstance(parsed, list):
         parsed = [parsed] if isinstance(parsed, dict) else []
 
-    return [_normalize_scene(s, i) for i, s in enumerate(parsed)]
+    scenes: list[dict] = []
+    for i, s in enumerate(parsed):
+        if not isinstance(s, dict):
+            continue
+        scenes.append(_normalize_scene(s, i))
+
+    if not scenes:
+        raise ValueError("No valid scenes parsed from storyboard LLM output")
+    return scenes
 
 
 async def storyboard_agent(state: dict, context: dict) -> dict:

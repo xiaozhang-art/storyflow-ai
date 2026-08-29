@@ -1,0 +1,38 @@
+FFmpeg command failed (rc=1): =00:02:25.72 bitrate=  86.3kbits/s speed=3.27x    
+frame= 4361 fps= 97 q=29.0 size=    1536kB time=00:02:27.71 bitrate=  85.2kbits/s speed=3.28x    
+frame= 4420 fps= 97 q=29.0 size=    1536kB time=00:02:29.69 bitrate=  84.1kbits/s speed=3.28x    
+frame= 4467 fps= 97 q=29.0 size=    1536kB time=00:02:31.29 bitrate=  83.2kbits/s speed=3.27x    
+frame= 4534 fps= 97 q=29.0 size=    1536kB time=00:02:33.49 bitrate=  82.0kbits/s speed=3.28x    
+frame= 4602 fps= 97 q=29.0 size=    1792kB time=00:02:35.75 bitrate=  94.3kbits/s speed= 3.3x    
+frame= 4673 fps= 98 q=29.0 size=    1792kB time=00:02:38.14 bitrate=  92.8kbits/s speed=3.31x    
+frame= 4730 fps= 98 q=29.0 size=    1792kB time=00:02:40.04 bitrate=  91.7kbits/s speed=3.32x    
+frame= 4790 fps= 98 q=29.0 size=    1792kB time=00:02:42.04 bitrate=  90.6kbits/s speed=3.32x    
+frame= 4823 fps= 98 q=29.0 size=    1792kB time=00:02:43.13 bitrate=  90.0kbits/s speed=3.31x    
+frame= 4887 fps= 98 q=29.0 size=    1792kB time=00:02:45.24 bitrate=  88.8kbits/s speed=3.32x    
+frame= 4947 fps= 98 q=29.0 size=    1792kB time=00:02:47.27 bitrate=  87.8kbits/s speed=3.32x    
+frame= 5017 fps= 99 q=29.0 size=    1792kB time=00:02:49.64 bitrate=  86.5kbits/s speed=3.34x    
+frame= 5076 fps= 99 q=29.0 size=    1792kB time=00:02:51.58 bitrate=  85.6kbits/s speed=3.34x    
+frame= 5150 fps= 99 q=29.0 size=    2048kB time=00:02:54.01 bitrate=  96.4kbits/s speed=3.36x    
+Error while filtering: Cannot allocate memory
+Failed to inject frame into filter network: Cannot allocate memory
+Error while processing the decoded data for stream #39:0
+[libx264 @ 00000239d1280a80] frame I:21    Avg QP:12.61  size:  5327
+[libx264 @ 00000239d1280a80] frame P:1323  Avg QP:10.93  size:   326
+[libx264 @ 00000239d1280a80] frame B:3839  Avg QP:13.76  size:   394
+[libx264 @ 00000239d1280a80] consecutive B-frames:  0.8%  0.9%  0.6% 97.6%
+[libx264 @ 00000239d1280a80] mb I  I16..4: 36.1% 63.3%  0.6%
+[libx264 @ 00000239d1280a80] mb P  I16..4:  4.8%  1.7%  0.0%  P16..4:  0.1%  0.0%  0.0%  0.0%  0.0%    skip:93.5%
+[libx264 @ 00000239d1280a80] mb B  I16..4:  0.2%  0.1%  0.0%  B16..8:  0.1%  0.0%  0.0%  direct: 1.7%  skip:97.9%  L0:51.7% L1:47.4% BI: 0.9%
+[libx264 @ 00000239d1280a80] 8x8 transform intra:33.8% inter:94.2%
+[libx264 @ 00000239d1280a80] coded y,u,v intra: 0.1% 0.1% 0.1% inter: 0.8% 0.6% 0.9%
+[libx264 @ 00000239d1280a80] i16 v,h,dc,p: 98%  1%  1%  0%
+[libx264 @ 00000239d1280a80] i8 v,h,dc,ddl,ddr,vr,hd,vl,hu: 34%  5% 61%  0%  0%  0%  0%  0%  0%
+[libx264 @ 00000239d1280a80] i4 v,h,dc,ddl,ddr,vr,hd,vl,hu: 25% 25% 29%  1%  2%  2%  5%  2%  7%
+[libx264 @ 00000239d1280a80] Weighted P-Frames: Y:11.4% UV:11.3%
+[libx264 @ 00000239d1280a80] ref P L0: 91.3%  3.0%  4.7%  0.8%  0.1%
+[libx264 @ 00000239d1280a80] ref B L0: 49.9% 50.0%  0.1%
+[libx264 @ 00000239d1280a80] ref B L1: 96.4%  3.6%
+[libx264 @ 00000239d1280a80] kb/s:95.25
+[aac @ 00000239d1280e80] Qavg: 65536.000
+[aac @ 00000239d1280e80] 2 frames left in the queue on closing
+Conversion failed!

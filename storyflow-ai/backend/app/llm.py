@@ -39,9 +39,9 @@ def get_llm(
 
 def get_creative_llm() -> ChatOpenAI:
     """LLM for creative tasks (script, storyboard) - higher temperature."""
-    return get_llm(temperature=0.8, max_tokens=8192)
+    return get_llm(temperature=0.8, max_tokens=settings.LLM_MAX_TOKENS)
 
 
 def get_precise_llm() -> ChatOpenAI:
     """LLM for precise tasks (character design, analysis) - lower temperature."""
-    return get_llm(temperature=0.4, max_tokens=4096)
+    return get_llm(temperature=0.4, max_tokens=settings.LLM_MAX_TOKENS)

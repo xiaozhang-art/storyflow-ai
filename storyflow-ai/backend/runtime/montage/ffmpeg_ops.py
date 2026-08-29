@@ -32,7 +32,8 @@ class FFmpegOps:
             cmd, capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode != 0:
-            stderr = result.stderr[:500] if result.stderr else "no stderr"
+            # ffmpeg errors appear at the END of stderr; keep the tail
+            stderr = result.stderr[-3000:] if result.stderr else "no stderr"
             raise RuntimeError(f"FFmpeg command failed (rc={result.returncode}): {stderr}")
         return result
 
@@ -346,7 +347,12 @@ class FFmpegOps:
                 "Outline=2,Shadow=1,MarginV=30,Alignment=2"
             )
             s = style or default_style
-            escaped_path = subtitle_path.replace("'", "\\'").replace(":", "\\:")
+            # Windows paths: backslashes must be escaped/converted in filter syntax
+            escaped_path = (
+                subtitle_path.replace("\\", "/")
+                .replace("'", "\\\\'")
+                .replace(":", "\\:")
+            )
             vf = f"subtitles='{escaped_path}':force_style='{s}'"
 
         cmd = [

@@ -1,0 +1,1180 @@
+2026-08-30 01:02:03,514 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:02:03,514 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("story")
+2026-08-30 01:02:03,515 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-08-30 01:02:03,517 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("episode")
+2026-08-30 01:02:03,518 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-08-30 01:02:03,520 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("character")
+2026-08-30 01:02:03,520 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-08-30 01:02:03,523 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("scene")
+2026-08-30 01:02:03,523 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-08-30 01:02:03,523 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("task")
+2026-08-30 01:02:03,523 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-08-30 01:02:03,523 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60646 - "GET /health HTTP/1.1" 200 OK
+2026-08-30 01:02:43,169 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:02:43,169 INFO sqlalchemy.engine.Engine INSERT INTO story (id, title, prompt, genre, total_episode, status, cover_image) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING created_at, updated_at
+2026-08-30 01:02:43,169 INFO sqlalchemy.engine.Engine [generated in 0.00033s] ('8ad45d6c4e704b9288847500f2973209', '雨夜奇遇', '一个失意的少年程序员在雨夜捡到一只会说话的猫，这只猫自称是异世界的守护者，两人从此结伴展开奇幻冒险', '奇幻', 1, 'created', None)
+2026-08-30 01:02:43,169 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:02:43,169 INFO sqlalchemy.engine.Engine [generated in 0.00029s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:02:43,181 INFO sqlalchemy.engine.Engine INSERT INTO task (id, story_id, status, progress, current_step, retry_count, error_message) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING created_at, updated_at
+2026-08-30 01:02:43,181 INFO sqlalchemy.engine.Engine [generated in 0.00042s] ('2773220ff25c46149fb7e0fbe8bfafca', '8ad45d6c4e704b9288847500f2973209', 'pending', 0, None, 0, None)
+2026-08-30 01:02:43,184 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:43,184 INFO sqlalchemy.engine.Engine [generated in 0.00035s] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:02:43,186 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60654 - "POST /api/story HTTP/1.1" 201 Created
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine [generated in 0.00034s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine [cached since 0.002981s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine UPDATE story SET status=?, updated_at=CURRENT_TIMESTAMP WHERE story.id = ?
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine [generated in 0.00028s] ('generating', '8ad45d6c4e704b9288847500f2973209')
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:02:43,217 INFO sqlalchemy.engine.Engine [cached since 0.05171s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.story_id = ? ORDER BY task.created_at DESC
+ LIMIT ? OFFSET ?
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine [generated in 0.00028s] ('8ad45d6c4e704b9288847500f2973209', 1, 0)
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine [generated in 0.00027s] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine UPDATE task SET status=?, current_step=?, updated_at=CURRENT_TIMESTAMP WHERE task.id = ?
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine [generated in 0.00027s] ('running', 'init', '2773220ff25c46149fb7e0fbe8bfafca')
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine [cached since 0.05398s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine COMMIT
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:43,230 INFO sqlalchemy.engine.Engine [cached since 0.01122s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+INFO:     127.0.0.1:60657 - "POST /api/story/8ad45d6c-4e70-4b92-8884-7500f2973209/generate HTTP/1.1" 200 OK
+2026-08-30 01:02:43,250 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:43,250 INFO sqlalchemy.engine.Engine [cached since 0.06617s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine [cached since 0.03222s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine [cached since 0.02182s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine [cached since 0.07928s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine COMMIT
+2026-08-30 01:02:43,253 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60659 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:02:48,312 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:02:48,312 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:48,312 INFO sqlalchemy.engine.Engine [cached since 5.079s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:02:48,314 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60670 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:02:53,348 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:02:53,348 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:53,348 INFO sqlalchemy.engine.Engine [cached since 10.12s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:02:53,348 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60672 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:02:58,369 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:02:58,369 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:02:58,369 INFO sqlalchemy.engine.Engine [cached since 15.14s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:02:58,374 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60676 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:03,389 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:03,389 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:03,389 INFO sqlalchemy.engine.Engine [cached since 20.16s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:03,389 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52777 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:08,417 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:08,417 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:08,418 INFO sqlalchemy.engine.Engine [cached since 25.18s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:08,420 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52782 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:13,448 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:13,448 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:13,448 INFO sqlalchemy.engine.Engine [cached since 30.21s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:13,451 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52808 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:18,469 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:18,469 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:18,473 INFO sqlalchemy.engine.Engine [cached since 35.24s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:18,476 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52812 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:23,511 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:23,511 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:23,511 INFO sqlalchemy.engine.Engine [cached since 40.28s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:23,511 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52815 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:28,536 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:28,537 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:28,537 INFO sqlalchemy.engine.Engine [cached since 45.3s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:28,540 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52819 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:33,561 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:33,561 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:33,561 INFO sqlalchemy.engine.Engine [cached since 50.33s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:33,575 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52822 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:38,592 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:38,592 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:38,592 INFO sqlalchemy.engine.Engine [cached since 55.36s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:38,592 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52825 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:43,628 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:43,628 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:43,628 INFO sqlalchemy.engine.Engine [cached since 60.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:43,635 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52828 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:48,657 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:48,657 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:48,657 INFO sqlalchemy.engine.Engine [cached since 65.43s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:48,657 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52831 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:53,681 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:53,681 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:53,681 INFO sqlalchemy.engine.Engine [cached since 70.45s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:53,681 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52834 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:03:58,719 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:03:58,719 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:03:58,719 INFO sqlalchemy.engine.Engine [cached since 75.49s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:03:58,719 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52837 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:03,763 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:03,764 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:03,764 INFO sqlalchemy.engine.Engine [cached since 80.53s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:03,766 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52846 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:08,805 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:08,806 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:08,806 INFO sqlalchemy.engine.Engine [cached since 85.57s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:08,809 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52849 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:13,829 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:13,829 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:13,829 INFO sqlalchemy.engine.Engine [cached since 90.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:13,839 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52852 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:18,858 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:18,858 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:18,858 INFO sqlalchemy.engine.Engine [cached since 95.63s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:18,864 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52855 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:23,886 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:23,886 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:23,886 INFO sqlalchemy.engine.Engine [cached since 100.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:23,886 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52858 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:28,930 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:28,930 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:28,930 INFO sqlalchemy.engine.Engine [cached since 105.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:28,930 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52861 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:33,956 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:33,956 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:33,956 INFO sqlalchemy.engine.Engine [cached since 110.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:33,956 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52864 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:38,989 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:38,989 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:38,989 INFO sqlalchemy.engine.Engine [cached since 115.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:38,991 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52879 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:44,011 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:44,011 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:44,014 INFO sqlalchemy.engine.Engine [cached since 120.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:44,014 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52882 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:49,046 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:49,047 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:49,047 INFO sqlalchemy.engine.Engine [cached since 125.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:49,050 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52885 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:54,064 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:54,064 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:54,064 INFO sqlalchemy.engine.Engine [cached since 130.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:54,064 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52888 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:04:59,100 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:04:59,100 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:04:59,100 INFO sqlalchemy.engine.Engine [cached since 135.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:04:59,100 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52910 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:04,143 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:04,143 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:04,143 INFO sqlalchemy.engine.Engine [cached since 140.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:04,143 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52913 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:09,168 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:09,168 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:09,168 INFO sqlalchemy.engine.Engine [cached since 145.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:09,168 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52916 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:14,189 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:14,190 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:14,190 INFO sqlalchemy.engine.Engine [cached since 151s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:14,193 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52919 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:19,210 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:19,210 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:19,210 INFO sqlalchemy.engine.Engine [cached since 156s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:19,214 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52921 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:24,231 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:24,231 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:24,231 INFO sqlalchemy.engine.Engine [cached since 161s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:24,236 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52925 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:29,257 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:29,258 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:29,258 INFO sqlalchemy.engine.Engine [cached since 166s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:29,261 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52928 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:34,284 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:34,285 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:34,286 INFO sqlalchemy.engine.Engine [cached since 171.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:34,291 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52931 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:39,311 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:39,312 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:39,312 INFO sqlalchemy.engine.Engine [cached since 176.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:39,317 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52934 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:44,348 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:44,348 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:44,348 INFO sqlalchemy.engine.Engine [cached since 181.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:44,348 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52937 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:49,367 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:49,367 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:49,367 INFO sqlalchemy.engine.Engine [cached since 186.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:49,370 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52941 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:54,403 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:54,403 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:54,403 INFO sqlalchemy.engine.Engine [cached since 191.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:54,403 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52945 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:05:59,451 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:05:59,451 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:05:59,451 INFO sqlalchemy.engine.Engine [cached since 196.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:05:59,451 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52961 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:04,493 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:04,493 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:04,495 INFO sqlalchemy.engine.Engine [cached since 201.3s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:04,500 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52969 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:09,537 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:09,537 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:09,537 INFO sqlalchemy.engine.Engine [cached since 206.3s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:09,548 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52989 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:14,591 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:14,592 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:14,592 INFO sqlalchemy.engine.Engine [cached since 211.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:14,592 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:53000 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:19,640 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:19,640 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:19,642 INFO sqlalchemy.engine.Engine [cached since 216.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:19,643 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62349 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:24,691 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:24,691 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:24,691 INFO sqlalchemy.engine.Engine [cached since 221.5s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:24,694 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62371 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:29,719 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:29,719 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:29,720 INFO sqlalchemy.engine.Engine [cached since 226.5s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:29,723 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62376 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:34,751 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:34,751 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:34,751 INFO sqlalchemy.engine.Engine [cached since 231.5s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:34,761 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62390 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:39,785 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:39,785 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:39,785 INFO sqlalchemy.engine.Engine [cached since 236.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:39,796 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62406 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:44,812 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:44,812 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:44,812 INFO sqlalchemy.engine.Engine [cached since 241.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:44,812 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62410 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:49,843 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:49,843 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:49,843 INFO sqlalchemy.engine.Engine [cached since 246.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:49,846 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62422 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:54,871 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:54,871 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:54,871 INFO sqlalchemy.engine.Engine [cached since 251.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:54,871 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62424 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:06:59,898 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:06:59,899 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:06:59,900 INFO sqlalchemy.engine.Engine [cached since 256.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:06:59,902 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62432 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:04,932 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:04,935 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:04,935 INFO sqlalchemy.engine.Engine [cached since 261.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:04,935 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62454 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:09,974 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:09,974 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:09,974 INFO sqlalchemy.engine.Engine [cached since 266.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:09,980 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62470 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:15,015 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:15,015 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:15,015 INFO sqlalchemy.engine.Engine [cached since 271.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:15,015 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62481 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:20,034 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:20,034 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:20,035 INFO sqlalchemy.engine.Engine [cached since 276.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:20,037 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62537 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:25,049 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:25,049 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:25,049 INFO sqlalchemy.engine.Engine [cached since 281.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:25,049 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62544 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:30,077 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:30,077 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:30,077 INFO sqlalchemy.engine.Engine [cached since 286.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:30,080 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62559 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:35,094 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:35,094 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:35,094 INFO sqlalchemy.engine.Engine [cached since 291.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:35,096 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62564 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:40,107 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:40,107 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:40,107 INFO sqlalchemy.engine.Engine [cached since 296.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:40,107 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62566 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:45,130 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:45,130 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:45,130 INFO sqlalchemy.engine.Engine [cached since 301.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:45,130 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62575 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:50,172 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:50,174 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:50,174 INFO sqlalchemy.engine.Engine [cached since 306.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:50,178 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62584 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:07:55,191 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:07:55,191 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:07:55,191 INFO sqlalchemy.engine.Engine [cached since 312s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:07:55,191 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62608 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:00,225 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:00,226 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:00,226 INFO sqlalchemy.engine.Engine [cached since 317s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:00,229 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:62624 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:05,252 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:05,252 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:05,252 INFO sqlalchemy.engine.Engine [cached since 322s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:05,253 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:50687 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:10,285 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:10,285 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:10,285 INFO sqlalchemy.engine.Engine [cached since 327.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:10,290 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:50703 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:15,335 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:15,338 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:15,340 INFO sqlalchemy.engine.Engine [cached since 332.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:15,353 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:50770 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:20,383 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:20,383 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:20,383 INFO sqlalchemy.engine.Engine [cached since 337.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:20,388 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:56507 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:25,416 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:25,416 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:25,416 INFO sqlalchemy.engine.Engine [cached since 342.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:25,421 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:56521 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:30,444 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:30,445 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:30,445 INFO sqlalchemy.engine.Engine [cached since 347.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:30,447 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:56525 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:35,460 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:35,460 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:35,460 INFO sqlalchemy.engine.Engine [cached since 352.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:35,465 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:65280 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:40,499 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:40,499 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:40,499 INFO sqlalchemy.engine.Engine [cached since 357.3s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:40,503 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:65284 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:45,542 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:45,542 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:45,542 INFO sqlalchemy.engine.Engine [cached since 362.3s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:45,542 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:65518 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:50,564 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:50,565 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:50,565 INFO sqlalchemy.engine.Engine [cached since 367.3s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:50,568 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49559 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:08:55,586 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:08:55,587 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:08:55,587 INFO sqlalchemy.engine.Engine [cached since 372.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:08:55,587 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49577 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:00,613 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:00,614 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:00,614 INFO sqlalchemy.engine.Engine [cached since 377.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:00,617 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49605 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:05,636 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:05,636 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:05,636 INFO sqlalchemy.engine.Engine [cached since 382.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:05,642 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49630 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:10,674 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:10,674 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:10,674 INFO sqlalchemy.engine.Engine [cached since 387.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:10,677 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49677 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:15,705 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:15,705 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:15,705 INFO sqlalchemy.engine.Engine [cached since 392.5s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:15,712 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49710 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:20,749 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:20,749 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:20,751 INFO sqlalchemy.engine.Engine [cached since 397.5s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:20,751 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49712 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:25,804 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:25,804 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:25,804 INFO sqlalchemy.engine.Engine [cached since 402.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:25,811 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49715 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:30,830 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:30,830 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:30,830 INFO sqlalchemy.engine.Engine [cached since 407.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:30,837 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49719 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:35,865 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:35,865 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:35,865 INFO sqlalchemy.engine.Engine [cached since 412.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:35,865 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49722 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:40,913 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:40,914 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:40,914 INFO sqlalchemy.engine.Engine [cached since 417.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:40,915 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49725 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:45,939 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:45,939 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:45,943 INFO sqlalchemy.engine.Engine [cached since 422.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:45,943 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49728 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:50,969 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:50,969 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:50,969 INFO sqlalchemy.engine.Engine [cached since 427.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:50,969 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49753 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:09:55,983 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:09:55,984 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:09:55,984 INFO sqlalchemy.engine.Engine [cached since 432.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:09:55,988 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49756 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:01,010 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:01,010 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:01,010 INFO sqlalchemy.engine.Engine [cached since 437.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:01,010 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49759 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:06,040 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:06,040 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:06,041 INFO sqlalchemy.engine.Engine [cached since 442.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:06,045 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49762 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:11,064 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:11,066 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:11,066 INFO sqlalchemy.engine.Engine [cached since 447.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:11,070 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49765 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:16,094 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:16,094 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:16,096 INFO sqlalchemy.engine.Engine [cached since 452.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:16,098 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49768 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:21,150 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:21,150 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:21,150 INFO sqlalchemy.engine.Engine [cached since 457.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:21,150 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49774 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:26,191 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:26,191 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:26,193 INFO sqlalchemy.engine.Engine [cached since 463s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:26,197 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49789 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:31,223 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:31,225 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:31,225 INFO sqlalchemy.engine.Engine [cached since 468s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:31,229 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49792 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:36,251 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:36,251 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:36,251 INFO sqlalchemy.engine.Engine [cached since 473s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:36,251 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49795 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:41,280 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:41,280 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:41,280 INFO sqlalchemy.engine.Engine [cached since 478s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:41,280 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49812 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:46,308 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:46,309 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:46,310 INFO sqlalchemy.engine.Engine [cached since 483.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:46,310 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49815 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:51,337 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:51,337 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:51,337 INFO sqlalchemy.engine.Engine [cached since 488.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:51,337 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49818 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:10:56,370 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:10:56,370 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:10:56,370 INFO sqlalchemy.engine.Engine [cached since 493.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:10:56,376 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49823 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:01,405 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:01,406 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:01,406 INFO sqlalchemy.engine.Engine [cached since 498.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:01,408 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49836 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:06,425 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:06,425 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:06,425 INFO sqlalchemy.engine.Engine [cached since 503.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:06,425 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49846 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:11,450 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:11,452 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:11,452 INFO sqlalchemy.engine.Engine [cached since 508.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:11,453 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49849 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:16,464 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:16,464 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:16,464 INFO sqlalchemy.engine.Engine [cached since 513.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:16,464 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:49852 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:21,572 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:21,572 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:21,572 INFO sqlalchemy.engine.Engine [cached since 518.3s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:21,578 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52337 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:26,602 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:26,602 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:26,602 INFO sqlalchemy.engine.Engine [cached since 523.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:26,605 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52340 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:31,617 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:31,617 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:31,617 INFO sqlalchemy.engine.Engine [cached since 528.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:31,617 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52343 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:36,667 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:36,667 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:36,667 INFO sqlalchemy.engine.Engine [cached since 533.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:36,673 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52346 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:41,708 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:41,708 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:41,708 INFO sqlalchemy.engine.Engine [cached since 538.5s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:41,708 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52348 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:46,759 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:46,761 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:46,762 INFO sqlalchemy.engine.Engine [cached since 543.5s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:46,771 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52352 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:51,813 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:51,813 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:51,813 INFO sqlalchemy.engine.Engine [cached since 548.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:51,824 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52355 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:11:56,859 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:11:56,859 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:11:56,859 INFO sqlalchemy.engine.Engine [cached since 553.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:11:56,859 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52359 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:01,896 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:01,896 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:01,896 INFO sqlalchemy.engine.Engine [cached since 558.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:01,896 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52361 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:06,951 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:06,951 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:06,951 INFO sqlalchemy.engine.Engine [cached since 563.7s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:06,951 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52365 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:12,006 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:12,007 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:12,007 INFO sqlalchemy.engine.Engine [cached since 568.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:12,010 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52368 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:17,047 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:17,047 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:17,047 INFO sqlalchemy.engine.Engine [cached since 573.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:17,047 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52386 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:22,063 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:22,063 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:22,063 INFO sqlalchemy.engine.Engine [cached since 578.8s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:22,063 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52408 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:27,103 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:27,104 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:27,105 INFO sqlalchemy.engine.Engine [cached since 583.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:27,110 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52412 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:32,130 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:32,136 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:32,136 INFO sqlalchemy.engine.Engine [cached since 588.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:32,136 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52415 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:37,163 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:37,163 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:37,163 INFO sqlalchemy.engine.Engine [cached since 593.9s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:37,177 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52430 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:42,213 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:42,213 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:42,213 INFO sqlalchemy.engine.Engine [cached since 599s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:42,213 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52433 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:47,251 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:47,251 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:47,251 INFO sqlalchemy.engine.Engine [cached since 604s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:47,258 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52436 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:52,274 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:52,274 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:52,277 INFO sqlalchemy.engine.Engine [cached since 609s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:52,284 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52447 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:12:57,327 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:12:57,328 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:12:57,328 INFO sqlalchemy.engine.Engine [cached since 614.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:12:57,333 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:52516 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:13:02,367 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:13:02,367 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:13:02,367 INFO sqlalchemy.engine.Engine [cached since 619.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:13:02,370 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59704 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:13:07,411 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:13:07,411 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:13:07,411 INFO sqlalchemy.engine.Engine [cached since 624.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:13:07,418 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59706 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:13:12,439 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:13:12,439 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:13:12,439 INFO sqlalchemy.engine.Engine [cached since 629.2s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:13:12,447 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59709 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:14:42,336 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:42,336 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:14:42,336 INFO sqlalchemy.engine.Engine [cached since 719.1s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:14:42,367 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59711 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:14:47,744 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:47,745 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:14:47,745 INFO sqlalchemy.engine.Engine [cached since 724.5s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:14:47,745 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59757 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:14:50,544 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:50,544 INFO sqlalchemy.engine.Engine DELETE FROM episode WHERE episode.story_id = ?
+2026-08-30 01:14:50,544 INFO sqlalchemy.engine.Engine [generated in 0.00030s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:50,544 INFO sqlalchemy.engine.Engine INSERT INTO episode (id, story_id, episode_no, title, summary, script) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?) RETURNING created_at, updated_at, id
+2026-08-30 01:14:50,544 INFO sqlalchemy.engine.Engine [generated in 0.00014s (insertmanyvalues) 1/1 (ordered)] ('254355a6efc9447cb42c61cab2fed1e2', '8ad45d6c4e704b9288847500f2973209', 1, '雨夜相遇', '被裁员的程序员林默在雨夜捡到一只受伤的黑猫，猫竟开口说话并自称异世界守护者。暗影怪物追杀而至，林默被迫相信眼前的一切。', '【雨夜，城市街头】\n林默提着公文包低头走在雨中，雨水打湿他的格子衫。他打开手机，屏幕上是“解除劳动合同通知”，雨水混着泪水模糊了视线。\n林默（自嘲）： “连猫都比我强，至少还有地方躲雨。”\n墙角传来微弱的猫叫。林默走近，看到一只黑猫蜷缩在纸箱里，左耳有伤口，金瞳警惕地盯着他。\n林默： “别 ... (413 characters truncated) ...  “这是什么？！”\n夜影： “你是这个世界的‘锚点’，也是唯一能帮我的人。”\n林默沉默片刻： “我凭什么信你？”\n夜影静静看他： “因为你已经无路可走，而我，能给你一个方向。”\n窗外，一团黑影慢慢爬上玻璃，露出一张扭曲的脸。\n夜影猛地抬头： “来了。”\n【定格，片名浮现：《雨夜之猫》】', '8027f5f0e3b74e6db93c52c7044850fc', '8ad45d6c4e704b9288847500f2973209', 2, '星辰碎片', '夜影向林默解释碎片来历，两人在废弃公交站遇到被黑影追捕的白裙女孩小雨。她的手腕星印记显现，与碎片有关。三人结伴前往旧图书馆。', '【林默家，清晨】\n林默坐在床边，黑猫蹲在窗台上，晨光照着它金色的眼睛。\n夜影： “星辰碎片共有五块。我感应到其中一块在城东的旧图书馆。”\n林默： “我为什么要帮你？这对我来说太离谱了。”\n夜影： “因为你的左眼已经能看到灵流，暗影也会循迹而来。逃不掉的，只能战斗。”\n林默揉着头发： “我 ... (351 characters truncated) ... 片原本被我封印在体内，现在力量流失，才引来了暗影。”\n林默： “那你知道碎片在哪？”\n小雨点头： “跟我来。第一块碎片，就在旧图书馆的地下。”\n夜影： “你带路。”\n【远处，黑雾凝聚成一个人影，猩红的双眼在阴影中睁开】\n暗影之首： “找到星之守护者了……还有那只猫。这一次，你们跑不掉。”', '56b84e27bf3740dab6bbd0f1f6f07485', '8ad45d6c4e704b9288847500f2973209', 3, '图书馆觉醒', '三人潜入旧图书馆地下，找到第一块碎片。小雨接触碎片的瞬间恢复记忆，显露星之公主的身份。暗影之首化身来袭，小雨觉醒力量惊退敌人。', '【旧图书馆，地下密室】\n空气里布满灰尘，手电光晃过生锈的书架。小雨站在圆形石台前，中央悬浮着一块发光的水晶碎片。\n林默： “这就是星辰碎片？”\n夜影： “小心，周围有封印。”\n小雨伸手触碰碎片，瞬间白光暴涨。碎片融入她体内，手腕星印爆发出耀眼星辉。\n小雨睁眼，瞳孔如星辰流转： “我记起来 ... (290 characters truncated) ... ，我越喜欢。等你们集齐所有碎片，就是通道开启之时。”\n黑雾消散。\n林默扶起夜影： “你没事吧？”\n夜影咳了一声： “还死不了。他故意放走我们，想让我们收集碎片。”\n小雨握紧拳头： “所以我们现在不能坐以待毙。要赶在他前头，抢先封印所有碎片。”\n林默看着小雨坚定地点头： “好，我们一起。”', '48ae27b58e6042e2af63b3975e93700f', '8ad45d6c4e704b9288847500f2973209', 4, '代码后门', '暗影之首通过林默被裁的旧电脑入侵现实，揭示林默三年前写的算法是两界通道的钥匙。夜影提出牺牲自己封门，林默却以程序员的后门技巧找到翻盘机会。', '【林默出租屋，傍晚】\n三人正在讨论下一块碎片的位置，桌上的旧电脑忽然自动亮起，屏幕上代码如瀑布般滚落。\n音响里传出低沉的笑声： “林默，你写下的‘门’，让我找到了出口。”\n林默脸色大变： “这是我三年前写的那个加密算法……当时已经删除了！”\n暗影之首的声音： “删除？你只是丢进了回收站。暗 ... (271 characters truncated) ...  //if rain { cat.open(); }\n夜影看着那行字，忽然笑了一声： “凡人，你还真会玩。”\n林默： “明日午时，我让这扇门变形。你就有机会趁虚而入，把它封死。”\n夜影沉默片刻： “你确定能成功？”\n林默： “我是程序员，我从不写必死代码。”\n小雨看着林默，眼泪无声滑落。', '1f3eb1c75df84e64ba4415bcb85e2a67', '8ad45d6c4e704b9288847500f2973209', 5, '雨夜的告别', '林默用后门逆转暗影之首的路径，夜影燃烧生命化作金色流星封死通道。三个月后，林默将冒险做成游戏，雨夜中传来熟悉的猫叫。', '【林默出租屋，次日午时】\n窗外的天光诡异地变暗，电脑屏幕上，黑色代码与金色代码纠缠。\n林默深吸一口气，按下回车： “现在！”\n代码瞬间重组，屏幕上出现一个黑洞般的漩涡。\n暗影之首的怒吼从电脑里传出： “你怎么敢——！”\n林默： “你太熟悉我的套路，但真正的程序员，从不会把后门写进注释里— ... (361 characters truncated) ... 。\n【游戏画面：雨夜街头，一只黑猫从屋檐跃下，开口说：“凡人，这个BUG你永远改不完。”】\n观众笑声一片。\n林默也笑了。\n【深夜，办公室】\n林默独自加班，窗外下起雨，忽然传来一声猫叫。\n他猛地推开窗，雨幕中，一道金色光点一闪而逝。\n林默嘴角勾起： “等着我，我去找你。”\n【全剧终】')
+2026-08-30 01:14:50,544 INFO sqlalchemy.engine.Engine COMMIT
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine DELETE FROM character WHERE character.story_id = ?
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine [generated in 0.00024s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine INSERT INTO character (id, story_id, name, gender, age, appearance, personality, avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?) RETURNING created_at, updated_at, id
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine [generated in 0.00014s (insertmanyvalues) 1/1 (ordered)] ('b7c90ea7ad054fa0a6d8aca73fe66ec5', '8ad45d6c4e704b9288847500f2973209', '林默', '男', 25, '{"hair": "Messy short black hair, unkempt and slightly overgrown, with strands sticking out in different directions.", "body": "Thin and lanky, aroun ... (125 characters truncated) ... ue jeans, and scuffed white sneakers; black-rimmed glasses.", "face": "Pale sallow face, heavy dark circles under the eyes, tired but intense gaze."}', '{"\\u6027\\u683c": "\\u5185\\u5411\\u3001\\u5014\\u5f3a\\u3001\\u5584\\u826f", "\\u72b6\\u6001": "\\u5931\\u4e1a\\u5931\\u610f\\u5374\\u5bf9\\u4ee3\\u7801\\u6709\\u6267\\u5ff5"}', None, '9e80ec99894d4ad287b1e4856db41167', '8ad45d6c4e704b9288847500f2973209', '夜影', '公', None, '{"hair": "Short, sleek black fur covering the entire body, glossy in the light.", "body": "Lean and agile cat body, medium-sized, with a tail that ca ... (118 characters truncated) ... g; natural black fur only.", "face": "Golden vertical slit pupils, sharp and contemptuous expression, left ear has a visible notch; sleek whiskers."}', '{"\\u6027\\u683c": "\\u6bd2\\u820c\\u3001\\u50b2\\u5a07\\u3001\\u5fe0\\u8bda", "\\u53e3\\u5934\\u7985": "\\u51e1\\u4eba\\uff0c\\u522b\\u62d6\\u540e\\u817f\\u3002", "\\u7269\\u79cd": "\\u9ed1\\u732b"}', None, '6fee4fb3e1974ff9b89cfa1a23e6b11a', '8ad45d6c4e704b9288847500f2973209', '小雨', '女', 18, '{"hair": "Long dark hair tied into a neat high ponytail, with a few loose strands framing her face.", "body": "Slender and graceful, about 160cm tall ... (147 characters truncated) ... ry on the hem; no heavy accessories.", "face": "Soft, gentle face with warm eyes; after awakening, her pupils turn into shimmering starlight color."}', '{"\\u6027\\u683c": "\\u6e29\\u67d4\\u575a\\u5f3a\\uff0c\\u5076\\u5c14\\u5192\\u5931", "\\u8eab\\u4efd": "\\u5f02\\u4e16\\u754c\\u661f\\u4e4b\\u5b88\\u62a4\\u8005/\\u516c\\u4e3b"}', None, '63a36974d0ab4674b1d4a9eb3ffbd36d', '8ad45d6c4e704b9288847500f2973209', '暗影之首', '未知', None, '{"hair": "No hair; the entire form is a swirling, conscious black mist.", "body": "Amorphous; can condense into a tall humanoid silhouette with no so ... (179 characters truncated) ... g cloak around the figure.", "face": "No visible mouth or nose; two narrow, elongated scarlet eyes glow from within the darkness, radiating malice."}', '{"\\u6027\\u683c": "\\u9634\\u9669\\u3001\\u50b2\\u6162\\u3001\\u504f\\u6267", "\\u76ee\\u6807": "\\u541e\\u566c\\u4e16\\u754c\\uff0c\\u6253\\u901a\\u4e24\\u754c\\u901a\\u9053"}', None)
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine COMMIT
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine DELETE FROM scene WHERE scene.story_id = ?
+2026-08-30 01:14:50,559 INFO sqlalchemy.engine.Engine [generated in 0.00025s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:50,577 INFO sqlalchemy.engine.Engine INSERT INTO scene (id, story_id, episode_id, scene_no, prompt, camera, duration, dialogue, image_url, audio_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (? ... 1405 characters truncated ...  (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING created_at, updated_at, id
+2026-08-30 01:14:50,577 INFO sqlalchemy.engine.Engine [generated in 0.00025s (insertmanyvalues) 1/1 (ordered)] ('13137509ab974078bcaa6f0010da6100', '8ad45d6c4e704b9288847500f2973209', None, 1, 'anime style, wide shot, rainy night city street, wet asphalt reflecting dim streetlights, a lone thin man walking in the rain, Lin Mo (messy short bl ... (346 characters truncated) ... lothes, rain droplets on his glasses, lonely desaturated blue-gray color palette, cinematic rain atmosphere, melancholic mood, high quality, detailed', '远景', 5, '林默：连猫都比我强，至少还有地方躲雨。', None, None, 'ee20cdff5f574c3789619b2cb1fc974a', '8ad45d6c4e704b9288847500f2973209', None, 2, "anime style, medium close-up shot, rainy night alley corner, a wet cardboard box tucked against brick wall, a black cat inside (short sleek glossy bl ... (321 characters truncated) ... ut gently, distant streetlamp casting warm glow on the cat's golden eyes, cold blue rain surroundings, shallow depth of field, high quality, detailed", '近景', 4, '林默：别怕，我带你回家。', None, None, '662d91ebdde84fd2b34cd1e1edfe464d', '8ad45d6c4e704b9288847500f2973209', None, 3, 'anime style, close-up shot, rainy night alley, black cat (short sleek glossy black fur, golden vertical slit pupils, sharp contemptuous expression, v ... (313 characters truncated) ... rms bracing behind him, rain streaks visible in the air between them, dramatic rain-soaked lighting, tense surreal atmosphere, high quality, detailed', '近景', 5, '夜影：别废话，后面有追兵，快走！ / 林默：猫……猫说话了？！', None, None, '262c00d7585a447389382b990d30dc2d', '8ad45d6c4e704b9288847500f2973209', None, 4, 'anime style, medium shot, night city street, street lamps flickering and going dark one by one, a swirling mass of conscious black mist surging from  ... (402 characters truncated) ... s) frozen in fear behind the cat, dramatic contrast between fading streetlights and rising gold glow, high-tension atmosphere, high quality, detailed', '中景', 5, '夜影：我是异世界守护者夜影。没时间解释，你已经被盯上了。', None, None, '98febe3ee5e54729826337d6c053da1d', '8ad45d6c4e704b9288847500f2973209', None, 5, "anime style, medium dynamic action shot, rainy night street, black cat (sleek glossy black fur, golden vertical slit pupils, left ear notch) leaping  ... (362 characters truncated) ... eyes looming in the background, dramatic high-contrast lighting, rain streaks frozen in motion, action-packed cinematic frame, high quality, detailed", '中景', 4, '夜影：凡人……愣着干什么？跑！', None, None ... 400 parameters truncated ... '30c298ea7ee24704a0d6a247d474dfc8', '8ad45d6c4e704b9288847500f2973209', None, 46, 'anime style, wide shot, a chaotic bedroom, a black cat with golden flames engulfing its body leaps off a desk toward a computer monitor, transforming ... (147 characters truncated) ... n a white dress shielding their eyes in the background, papers and debris flying, contrast of black shadows and dazzling gold, high quality, detailed', '全景', 5, '', None, None, 'b22630e1dfff44e1ba0e77aeec2a9232', '8ad45d6c4e704b9288847500f2973209', None, 47, 'anime style, medium shot, aftermath in a dim rental room, shattered computer screen on the desk with smoke rising, a young woman in a white dress wit ... (142 characters truncated) ... at hair in his fingers, his eyes red and wet, a single black hair on the wooden table, gray melancholic light from the window, high quality, detailed', '中景', 6, '谢谢你，夜影。', None, None, '44d6409f7d1f4238a9be8d568ad078c9', '8ad45d6c4e704b9288847500f2973209', None, 48, 'anime style, wide shot, a bright game launch event venue, large stage screen displaying the key art of Rainy Night Cat with a black cat silhouette un ... (264 characters truncated) ... ttern embroidery applauds, her wrist star mark glowing faintly, audience silhouettes and stage lights, celebratory atmosphere, high quality, detailed', '全景', 6, '这个游戏，献给一只会说话的猫，和一个教会我勇敢的公主。', None, None, '7e5d3e37e607477391ca70c39d589910', '8ad45d6c4e704b9288847500f2973209', None, 49, 'anime style, medium shot, a large projection screen at a game launch event showing an animated rainy street at night, a sleek black cat with golden v ... (128 characters truncated) ... ecting on wet pavement, raindrops flying, in the foreground blurred silhouettes of an audience laughing, vibrant night colors, high quality, detailed', '中景', 5, '凡人，这个BUG你永远改不完。', None, None, 'f756dd0f863d47ae94385f805da4e8b5', '8ad45d6c4e704b9288847500f2973209', None, 50, 'anime style, medium shot, late night office, a single warm desk lamp glowing, rain streaking down the window, Lin Mo, with messy short black hair and ... (113 characters truncated) ... eak flashing across the dark rainy sky, his eyes determined and hopeful, cool blue night tones contrasted with warm lamplight, high quality, detailed', '中景', 5, '等着我，我去找你。', None, None)
+2026-08-30 01:14:50,582 INFO sqlalchemy.engine.Engine COMMIT
+2026-08-30 01:14:50,588 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:50,589 INFO sqlalchemy.engine.Engine SELECT scene.id, scene.story_id, scene.episode_id, scene.scene_no, scene.prompt, scene.camera, scene.duration, scene.dialogue, scene.image_url, scene.audio_url, scene.created_at, scene.updated_at 
+FROM scene 
+WHERE scene.story_id = ?
+2026-08-30 01:14:50,589 INFO sqlalchemy.engine.Engine [generated in 0.00028s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:50,591 INFO sqlalchemy.engine.Engine UPDATE scene SET image_url=?, updated_at=CURRENT_TIMESTAMP WHERE scene.id = ?
+2026-08-30 01:14:50,591 INFO sqlalchemy.engine.Engine [generated in 0.00035s] [('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_6.png', '0496b552e5a944e7982c5c86fc1f9a0c'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_8.png', '05f098673c1a43f6b4635b87a53c1174'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_7.png', '0e01cd5fddcd439691cdaae2909202f7'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_10.png', '11e9ce7c9c0e4f72a010ef1936b8f926'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_1.png', '13137509ab974078bcaa6f0010da6100'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_26.png', '15081cfa51a742a4bf4db53f5255e3b6'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_13.png', '1a52c6899b9b4aa2b23ed3bde26c33c5'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_20.png', '201a434758f448fea99ee327b3ecd6cd')  ... displaying 10 of 50 total bound parameter sets ...  ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_32.png', 'f94b93506bf2431e880f0b1b2898095e'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_19.png', 'fc8b85eab545417eb3c486760eb1989e')]
+2026-08-30 01:14:50,591 INFO sqlalchemy.engine.Engine COMMIT
+2026-08-30 01:14:50,591 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:50,591 INFO sqlalchemy.engine.Engine SELECT scene.id, scene.story_id, scene.episode_id, scene.scene_no, scene.prompt, scene.camera, scene.duration, scene.dialogue, scene.image_url, scene.audio_url, scene.created_at, scene.updated_at 
+FROM scene 
+WHERE scene.story_id = ?
+2026-08-30 01:14:50,591 INFO sqlalchemy.engine.Engine [cached since 0.01356s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:50,591 INFO sqlalchemy.engine.Engine UPDATE scene SET audio_url=?, updated_at=CURRENT_TIMESTAMP WHERE scene.id = ?
+2026-08-30 01:14:50,591 INFO sqlalchemy.engine.Engine [generated in 0.00041s] [('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_8.wav', '05f098673c1a43f6b4635b87a53c1174'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_7.wav', '0e01cd5fddcd439691cdaae2909202f7'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_10.wav', '11e9ce7c9c0e4f72a010ef1936b8f926'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_1.wav', '13137509ab974078bcaa6f0010da6100'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_26.wav', '15081cfa51a742a4bf4db53f5255e3b6'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_13.wav', '1a52c6899b9b4aa2b23ed3bde26c33c5'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_20.wav', '201a434758f448fea99ee327b3ecd6cd'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_45.wav', '20746da2561347fb98b5c2717f1d8b0f')  ... displaying 10 of 45 total bound parameter sets ...  ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_32.wav', 'f94b93506bf2431e880f0b1b2898095e'), ('/storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/audio/scene_19.wav', 'fc8b85eab545417eb3c486760eb1989e')]
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine COMMIT
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine [cached since 727.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine UPDATE task SET status=?, progress=?, current_step=?, updated_at=CURRENT_TIMESTAMP WHERE task.id = ?
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine [generated in 0.00029s] ('completed', 100, 'done', '2773220ff25c46149fb7e0fbe8bfafca')
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine [cached since 727.4s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:14:50,607 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:14:50,622 INFO sqlalchemy.engine.Engine [cached since 727.4s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:50,622 INFO sqlalchemy.engine.Engine UPDATE story SET status=?, updated_at=CURRENT_TIMESTAMP WHERE story.id = ?
+2026-08-30 01:14:50,622 INFO sqlalchemy.engine.Engine [cached since 727.4s ago] ('completed', '8ad45d6c4e704b9288847500f2973209')
+2026-08-30 01:14:50,622 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:14:50,622 INFO sqlalchemy.engine.Engine [cached since 727.4s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:50,622 INFO sqlalchemy.engine.Engine COMMIT
+2026-08-30 01:14:52,784 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:52,784 INFO sqlalchemy.engine.Engine SELECT task.id, task.story_id, task.status, task.progress, task.current_step, task.retry_count, task.error_message, task.created_at, task.updated_at 
+FROM task 
+WHERE task.id = ?
+2026-08-30 01:14:52,784 INFO sqlalchemy.engine.Engine [cached since 729.6s ago] ('2773220ff25c46149fb7e0fbe8bfafca',)
+2026-08-30 01:14:52,787 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59774 - "GET /api/task/2773220f-f25c-4614-9fb7-e0fbe8bfafca HTTP/1.1" 200 OK
+2026-08-30 01:14:52,808 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:52,809 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:14:52,809 INFO sqlalchemy.engine.Engine [cached since 729.6s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:52,812 INFO sqlalchemy.engine.Engine SELECT episode.id, episode.story_id, episode.episode_no, episode.title, episode.summary, episode.script, episode.created_at, episode.updated_at 
+FROM episode 
+WHERE episode.story_id = ? ORDER BY episode.episode_no
+2026-08-30 01:14:52,812 INFO sqlalchemy.engine.Engine [generated in 0.00032s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:52,815 INFO sqlalchemy.engine.Engine SELECT character.id, character.story_id, character.name, character.gender, character.age, character.appearance, character.personality, character.avatar_url, character.created_at, character.updated_at 
+FROM character 
+WHERE character.story_id = ?
+2026-08-30 01:14:52,815 INFO sqlalchemy.engine.Engine [generated in 0.00030s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:52,817 INFO sqlalchemy.engine.Engine SELECT scene.id, scene.story_id, scene.episode_id, scene.scene_no, scene.prompt, scene.camera, scene.duration, scene.dialogue, scene.image_url, scene.audio_url, scene.created_at, scene.updated_at 
+FROM scene 
+WHERE scene.story_id = ? ORDER BY scene.scene_no
+2026-08-30 01:14:52,817 INFO sqlalchemy.engine.Engine [generated in 0.00029s] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:52,819 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59778 - "GET /api/story/8ad45d6c-4e70-4b92-8884-7500f2973209/result HTTP/1.1" 200 OK
+2026-08-30 01:14:52,891 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:14:52,892 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:14:52,892 INFO sqlalchemy.engine.Engine [cached since 729.7s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:14:52,896 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59781 - "GET /api/story/8ad45d6c-4e70-4b92-8884-7500f2973209 HTTP/1.1" 200 OK
+2026-08-30 01:23:59,975 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:24:00,001 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:24:00,005 INFO sqlalchemy.engine.Engine [cached since 1277s ago] ('0c46369cfe21498fb77faf671ed41bd9',)
+2026-08-30 01:24:00,052 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:55210 - "GET /api/story/0c46369c-fe21-498f-b77f-af671ed41bd9 HTTP/1.1" 404 Not Found
+2026-08-30 01:24:00,105 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:24:00,105 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:24:00,105 INFO sqlalchemy.engine.Engine [cached since 1277s ago] ('0c46369cfe21498fb77faf671ed41bd9',)
+2026-08-30 01:24:00,129 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:65491 - "GET /api/story/0c46369c-fe21-498f-b77f-af671ed41bd9 HTTP/1.1" 404 Not Found
+2026-08-30 01:24:01,831 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:24:01,931 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story ORDER BY story.created_at DESC
+ LIMIT ? OFFSET ?
+2026-08-30 01:24:01,931 INFO sqlalchemy.engine.Engine [generated in 0.00783s] (20, 0)
+2026-08-30 01:24:01,989 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:58346 - "GET /api/story?skip=0&limit=20 HTTP/1.1" 200 OK
+2026-08-30 01:24:02,019 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:24:02,020 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story ORDER BY story.created_at DESC
+ LIMIT ? OFFSET ?
+2026-08-30 01:24:02,021 INFO sqlalchemy.engine.Engine [cached since 0.09654s ago] (20, 0)
+2026-08-30 01:24:02,039 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:50062 - "GET /api/story?skip=0&limit=20 HTTP/1.1" 200 OK
+2026-08-30 01:24:06,588 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:24:06,588 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:24:06,588 INFO sqlalchemy.engine.Engine [cached since 1283s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:24:06,613 INFO sqlalchemy.engine.Engine SELECT episode.id, episode.story_id, episode.episode_no, episode.title, episode.summary, episode.script, episode.created_at, episode.updated_at 
+FROM episode 
+WHERE episode.story_id = ? ORDER BY episode.episode_no
+2026-08-30 01:24:06,613 INFO sqlalchemy.engine.Engine [cached since 553.8s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:24:06,634 INFO sqlalchemy.engine.Engine SELECT character.id, character.story_id, character.name, character.gender, character.age, character.appearance, character.personality, character.avatar_url, character.created_at, character.updated_at 
+FROM character 
+WHERE character.story_id = ?
+2026-08-30 01:24:06,638 INFO sqlalchemy.engine.Engine [cached since 553.8s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:24:06,655 INFO sqlalchemy.engine.Engine SELECT scene.id, scene.story_id, scene.episode_id, scene.scene_no, scene.prompt, scene.camera, scene.duration, scene.dialogue, scene.image_url, scene.audio_url, scene.created_at, scene.updated_at 
+FROM scene 
+WHERE scene.story_id = ? ORDER BY scene.scene_no
+2026-08-30 01:24:06,655 INFO sqlalchemy.engine.Engine [cached since 553.8s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:24:06,692 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:59665 - "GET /api/story/8ad45d6c-4e70-4b92-8884-7500f2973209/result HTTP/1.1" 200 OK
+2026-08-30 01:24:06,738 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-08-30 01:24:06,738 INFO sqlalchemy.engine.Engine SELECT story.id, story.title, story.prompt, story.genre, story.total_episode, story.status, story.cover_image, story.created_at, story.updated_at 
+FROM story 
+WHERE story.id = ?
+2026-08-30 01:24:06,742 INFO sqlalchemy.engine.Engine [cached since 1284s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:24:06,747 INFO sqlalchemy.engine.Engine SELECT episode.id, episode.story_id, episode.episode_no, episode.title, episode.summary, episode.script, episode.created_at, episode.updated_at 
+FROM episode 
+WHERE episode.story_id = ? ORDER BY episode.episode_no
+2026-08-30 01:24:06,747 INFO sqlalchemy.engine.Engine [cached since 553.9s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:24:06,754 INFO sqlalchemy.engine.Engine SELECT character.id, character.story_id, character.name, character.gender, character.age, character.appearance, character.personality, character.avatar_url, character.created_at, character.updated_at 
+FROM character 
+WHERE character.story_id = ?
+2026-08-30 01:24:06,754 INFO sqlalchemy.engine.Engine [cached since 553.9s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:24:06,760 INFO sqlalchemy.engine.Engine SELECT scene.id, scene.story_id, scene.episode_id, scene.scene_no, scene.prompt, scene.camera, scene.duration, scene.dialogue, scene.image_url, scene.audio_url, scene.created_at, scene.updated_at 
+FROM scene 
+WHERE scene.story_id = ? ORDER BY scene.scene_no
+2026-08-30 01:24:06,760 INFO sqlalchemy.engine.Engine [cached since 553.9s ago] ('8ad45d6c4e704b9288847500f2973209',)
+2026-08-30 01:24:06,769 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60775 - "GET /api/story/8ad45d6c-4e70-4b92-8884-7500f2973209/result HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52578 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/video/story.mp4 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63295 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_1.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63296 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_2.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63297 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_3.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63298 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_4.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63299 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_5.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63300 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_6.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64321 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_7.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64323 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_8.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64324 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_9.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64325 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_10.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64327 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_12.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64326 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_11.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59544 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_13.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61451 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_14.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61459 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_15.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61464 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_16.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61463 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_17.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61465 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_18.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58691 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_19.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50475 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_20.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50477 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_21.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56765 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_24.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56766 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_23.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56762 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_22.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53553 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_25.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59149 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_26.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61174 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_28.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61175 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_29.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61173 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_27.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61177 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_30.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64869 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_31.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64870 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_32.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52404 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_33.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54335 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_35.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54336 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_36.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52408 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_34.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57377 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_37.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62790 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_39.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57379 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_38.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50553 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_40.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50555 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_41.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50557 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_42.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54479 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_43.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51554 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_44.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51509 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_45.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51511 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_46.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55211 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_47.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51002 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_49.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51000 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_48.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51004 - "GET /storage/stories/8ad45d6c-4e70-4b92-8884-7500f2973209/images/scene_50.png HTTP/1.1" 200 OK

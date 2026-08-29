@@ -48,6 +48,7 @@ STEP_STORY_STATUS = {
     "image_to_video": "image_done",
     "voice": "voice_done",
     "video": "completed",
+    "done": "completed",  # final step -> story completed
 }
 
 

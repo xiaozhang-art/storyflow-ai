@@ -256,7 +256,14 @@ class WorkflowEngine:
                 skip = False
 
                 try:
-                    result = await agent_func(state)
+                    # Build v3 agent context (story_world unavailable, use empty)
+                    context = {
+                        "story_world": None,
+                        "workspace": "",
+                        "use_capability": None,
+                        "project_id": story_id,
+                    }
+                    result = await agent_func(state, context)
                     if not isinstance(result, dict):
                         result = {"result": result}
                     state.update(result)
